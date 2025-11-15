@@ -1,23 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:streamix/screens/auth/auth_wrapper.dart'; // Import the wrapper
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'firebase_options.dart'; // Make sure you ran 'flutterfire configure'
 
-import 'firebase_options.dart';
-
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Load environment variables
   await dotenv.load(fileName: ".env");
 
-  // Initialize Supabase
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL']!,
     anonKey: dotenv.env['SUPABASE_ANON_KEY']!,
   );
 
-  // Initialize Firebase (after we configure it)
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -25,7 +21,6 @@ void main() async {
   runApp(const StreamixApp());
 }
 
-// Global Supabase client
 final supabase = Supabase.instance.client;
 
 class StreamixApp extends StatelessWidget {
@@ -37,14 +32,14 @@ class StreamixApp extends StatelessWidget {
       title: 'Streamix',
       debugShowCheckedModeBanner: false,
 
-      // --- OUR NEW APP THEME ---
+      // Our App Theme
       theme: ThemeData(
         brightness: Brightness.light,
-        primaryColor: const Color(0xFF007A7A), // A deep, trustworthy teal
+        primaryColor: const Color(0xFF007A7A),
         scaffoldBackgroundColor: Colors.white,
         colorScheme: const ColorScheme.light(
-          primary: Color(0xFF007A7A), // Teal
-          secondary: Color(0xFF00C2C2), // A brighter, energetic teal
+          primary: Color(0xFF007A7A),
+          secondary: Color(0xFF00C2C2),
           background: Colors.white,
           surface: Colors.white,
           onPrimary: Colors.white,
@@ -86,17 +81,9 @@ class StreamixApp extends StatelessWidget {
           ),
         ),
       ),
-      // --- END OF THEME ---
 
-      // Placeholder home. We will replace this in Step 1.
-      home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Streamix'),
-        ),
-        body: const Center(
-          child: Text('Step 0 Complete!'),
-        ),
-      ),
+      // Use AuthWrapper as the home
+      home: const AuthWrapper(),
     );
   }
 }
