@@ -8,6 +8,96 @@ class AuthService {
   /// Stream for checking auth state changes
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
+  // ... (inside the AuthService class)
+
+  /// --- NEW: Delete Account ---
+  /// Re-authenticates and then permanently deletes the user's account.
+  Future<String> deleteAccount({required String currentPassword}) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        return "No user signed in.";
+      }
+
+      // 1. Get the user's email and create a credential
+      final email = user.email!;
+      AuthCredential credential = EmailAuthProvider.credential(
+        email: email,
+        password: currentPassword,
+      );
+
+      // 2. Re-authenticate the user with their CURRENT password
+      await user.reauthenticateWithCredential(credential);
+
+      // 3. If re-auth is successful, first delete their Firestore data
+      await _firestore.collection('users').doc(user.uid).delete();
+
+      // 4. Finally, delete the Firebase Auth user
+      await user.delete();
+
+      return "Success";
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'wrong-password') {
+        return 'Wrong password. Please try again.';
+      }
+      return e.message ?? "An error occurred.";
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// Updates the 'mobile' field in the user's Firestore document.
+  Future<String> updateContactNumber(String newNumber) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        return "No user signed in.";
+      }
+
+      // Update the 'mobile' field in the 'users' collection
+      await _firestore.collection('users').doc(user.uid).update({
+        'mobile': newNumber,
+      });
+
+      return "Success";
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
+  /// --- NEW: Change Password ---
+  /// Re-authenticates the user and changes their password.
+  Future<String> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      final user = _auth.currentUser;
+      if (user == null) {
+        return "No user signed in.";
+      }
+
+      // 1. Get the user's email and create a credential
+      final email = user.email!;
+      AuthCredential credential = EmailAuthProvider.credential(
+        email: email,
+        password: currentPassword,
+      );
+
+      // 2. Re-authenticate the user with their CURRENT password
+      await user.reauthenticateWithCredential(credential);
+
+      // 3. If successful, update to the NEW password
+      await user.updatePassword(newPassword);
+
+      return "Success";
+    } on FirebaseAuthException catch (e) {
+      return e.message ?? "An error occurred.";
+    } catch (e) {
+      return e.toString();
+    }
+  }
+
   /// Sign In with Email & Password
   Future<String> signInWithEmail(String email, String password) async {
     try {

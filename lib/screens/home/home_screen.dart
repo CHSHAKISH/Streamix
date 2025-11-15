@@ -1,8 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:streamix/screens/chat/chat_screen.dart'; // Import placeholder
-import 'package:streamix/screens/requests/requests_list_screen.dart'; // Import placeholder
+import 'package:streamix/screens/chat/chat_screen.dart';
+import 'package:streamix/screens/requests/requests_list_screen.dart';
+import 'package:streamix/screens/settings/settings_screen.dart'; // <-- 1. IMPORT
 import 'package:streamix/services/auth_service.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -17,7 +18,6 @@ class _HomeScreenState extends State<HomeScreen> {
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
   String _searchQuery = "";
 
-  // Controller for the search bar
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -32,6 +32,19 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Streamix'),
         actions: [
+          // --- 2. NEW SETTINGS BUTTON ---
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+          ),
+          // --- END NEW BUTTON ---
+
           // Logout Button
           IconButton(
             icon: const Icon(Icons.logout),
@@ -45,7 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.sync),
             tooltip: 'Sync Users',
             onPressed: () {
-              // This just forces the StreamBuilder to rebuild
               setState(() {});
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('User list synced!')),
@@ -86,7 +98,6 @@ class _HomeScreenState extends State<HomeScreen> {
           // --- User List ---
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
-              // Stream all users from the 'users' collection
               stream: FirebaseFirestore.instance.collection('users').snapshots(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
@@ -101,22 +112,16 @@ class _HomeScreenState extends State<HomeScreen> {
 
                 // --- Filter Logic ---
                 final users = snapshot.data!.docs.where((doc) {
-                  // Don't show the currently logged-in user in the list
                   if (doc['uid'] == _currentUserId) {
                     return false;
                   }
-
-                  // Search filter logic
                   if (_searchQuery.isEmpty) {
-                    return true; // Show all
+                    return true;
                   }
-
                   final data = doc.data() as Map<String, dynamic>;
                   final name = (data['name'] as String? ?? '').toLowerCase();
                   final email = (data['email'] as String? ?? '').toLowerCase();
-
                   return name.contains(_searchQuery) || email.contains(_searchQuery);
-
                 }).toList();
                 // --- End Filter Logic ---
 
@@ -142,7 +147,6 @@ class _HomeScreenState extends State<HomeScreen> {
                       title: Text(userName),
                       subtitle: Text(userEmail),
                       onTap: () {
-                        // Go to the chat-like page (Step 3)
                         Navigator.push(
                           context,
                           MaterialPageRoute(
