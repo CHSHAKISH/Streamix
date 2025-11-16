@@ -6,6 +6,15 @@ class TicketService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
+  /// --- NEW FUNCTION ---
+  /// Marks a request as 'completed' and saves the Supabase media URL.
+  Future<void> completeRequestWithMedia(String requestId, String mediaUrl) async {
+    await _firestore.collection('requests').doc(requestId).update({
+      'status': 'completed',
+      'mediaUrl': mediaUrl, // Save the public URL of the image
+    });
+  }
+
   /// Creates a new scheduled request
   Future<String> createScheduledRequest({
     required String peerUserId,

@@ -7,7 +7,7 @@ class SupabaseStorageService {
   /// Uploads media for a specific request and returns the public URL
   Future<String?> uploadRequestMedia(String requestId, File file, String fileExtension) async {
     try {
-      // 1. Create a unique file path based on the request ID
+      // 1. Create a unique file path
       final filePath =
           'public/$requestId/media_${DateTime.now().millisecondsSinceEpoch}.$fileExtension';
 

@@ -33,12 +33,11 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   final SignalingService _signalingService = SignalingService();
   final SupabaseStorageService _supabaseStorage = SupabaseStorageService();
 
+  // State variables
   final Location _location = Location();
   StreamSubscription<LocationData>? _locationSubscription;
   bool _isSharing = false;
   Timer? _sessionTimer;
-
-  // (Other state variables)
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
@@ -48,7 +47,11 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   bool _isUploading = false;
   bool _isMuted = false;
 
-  final Map<String, dynamic> _iceConfig = { /* ... */ };
+  final Map<String, dynamic> _iceConfig = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+    ]
+  };
 
   @override
   void initState() {
@@ -71,7 +74,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     super.dispose();
   }
 
-  // --- TIMER FUNCTIONS (NOW CORRECT) ---
+  // --- Timer Functions ---
   void _startSessionTimer() {
     _sessionTimer?.cancel();
     _sessionTimer = Timer(Duration(seconds: widget.durationInSeconds), () {
@@ -87,17 +90,24 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
+  // --- THIS FUNCTION IS NOW COMPLETE ---
   String _formatDurationForDisplay() {
     final int minutes = (widget.durationInSeconds / 60).floor();
     final int seconds = widget.durationInSeconds % 60;
     return "$minutes min ${seconds} sec";
   }
-  // --- END TIMER FUNCTIONS ---
+  // --- END ---
 
-  void _toggleMute() { /* ... */ }
-  Future<void> _handleImageSample(String serviceType) async { /* ... */ }
+  void _toggleMute() {
+    if (_localStream == null) return;
+    final audioTrack = _localStream!.getAudioTracks().first;
+    setState(() {
+      _isMuted = !_isMuted;
+      audioTrack.enabled = !_isMuted;
+    });
+  }
 
-  // --- (IMPLEMENTED) Location Sharing ---
+  // --- Location Sharing ---
   Future<void> _startLocationSharing() async {
     var status = await Permission.location.request();
     if (status.isDenied) { /*... snackbar ...*/ return; }
@@ -108,16 +118,13 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           _locationService.updateSenderLocation(widget.requestId, newLocation);
         });
     setState(() { _isSharing = true; });
-    _startSessionTimer(); // <-- FIX: Start the timer
+    _startSessionTimer();
   }
 
   Future<void> _stopLocationSharing() async {
     _sessionTimer?.cancel();
     _locationSubscription?.cancel();
-
-    // <-- FIX: Mark as complete in Firestore
     await _ticketService.completeRequest(widget.requestId);
-
     await _locationService.deleteSenderLocation(widget.requestId);
 
     setState(() { _isSharing = false; });
@@ -127,16 +134,128 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
-  // --- (Video placeholders) ---
-  Future<void> _startVideoStream() async { _startSessionTimer(); }
+  // --- Image Sample Logic ---
+  Future<void> _handleImageSample(String serviceType) async {
+    final camera = serviceType == 'front_camera'
+        ? CameraDevice.front
+        : CameraDevice.rear;
+
+    var status = await Permission.camera.request();
+    if (status.isDenied) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera permission is required.')),
+      );
+      return;
+    }
+
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: ImageSource.camera,
+      preferredCameraDevice: camera,
+    );
+
+    if (image != null) {
+      setState(() { _isUploading = true; });
+      File imageFile = File(image.path);
+
+      String? downloadUrl = await _supabaseStorage.uploadRequestMedia(
+        widget.requestId,
+        imageFile,
+        'jpg',
+      );
+
+      if (downloadUrl != null) {
+        await _ticketService.completeRequestWithMedia(widget.requestId, downloadUrl);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Image uploaded successfully!')),
+          );
+          Navigator.pop(context);
+        }
+      } else {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error uploading image.')),
+        );
+      }
+      if (mounted) setState(() { _isUploading = false; });
+    }
+  }
+
+  // --- Video Sample Logic ---
+  Future<void> _handleVideoSample(String serviceType) async {
+    final camera = serviceType == 'front_video'
+        ? CameraDevice.front
+        : CameraDevice.rear;
+
+    var camStatus = await Permission.camera.request();
+    var micStatus = await Permission.microphone.request();
+    if (camStatus.isDenied || micStatus.isDenied) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Camera & Microphone permissions are required.')),
+      );
+      return;
+    }
+
+    final ImagePicker picker = ImagePicker();
+    final XFile? video = await picker.pickVideo(
+      source: ImageSource.camera,
+      preferredCameraDevice: camera,
+      maxDuration: Duration(seconds: widget.durationInSeconds),
+    );
+
+    if (video != null) {
+      setState(() { _isUploading = true; });
+      File videoFile = File(video.path);
+
+      String? downloadUrl = await _supabaseStorage.uploadRequestMedia(
+        widget.requestId,
+        videoFile,
+        'mp4',
+      );
+
+      if (downloadUrl != null) {
+        await _ticketService.completeRequestWithMedia(widget.requestId, downloadUrl);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Video uploaded successfully!')),
+          );
+          Navigator.pop(context);
+        }
+      } else {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error uploading video.')),
+        );
+      }
+      if (mounted) setState(() { _isUploading = false; });
+    }
+  }
+
+  // --- (Buggy Feature) Video Streaming ---
+  Future<void> _startVideoStream() async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Live Stream feature not enabled.')),
+    );
+    // _startSessionTimer();
+  }
   Future<void> _stopVideoStream() async {
     _sessionTimer?.cancel();
     await _ticketService.completeRequest(widget.requestId);
-    /* ... rest of video stop logic ... */
+    /* ... */
   }
 
   // --- Main Build Function ---
   Widget _buildTaskWidget() {
+    if (_isUploading) {
+      return const Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(height: 20),
+          Text('Uploading media...'),
+        ],
+      );
+    }
+
     switch (widget.serviceType) {
       case 'location':
         return Column(
@@ -145,12 +264,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           children: [
             ElevatedButton.icon(
               icon: Icon(_isSharing ? Icons.stop : Icons.play_arrow),
-              label: Text(_isSharing
-                  ? 'Stop Sharing'
-                  : 'Start Sharing Location'),
-              onPressed: _isSharing
-                  ? _stopLocationSharing
-                  : _startLocationSharing,
+              label: Text(_isSharing ? 'Stop Sharing' : 'Start Sharing Location'),
+              onPressed: _isSharing ? _stopLocationSharing : _startLocationSharing,
               style: ElevatedButton.styleFrom(
                 backgroundColor: _isSharing ? Colors.red : Theme.of(context).primaryColor,
                 foregroundColor: Colors.white,
@@ -160,7 +275,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
               Padding(
                 padding: const EdgeInsets.only(top: 20),
                 child: Text(
-                  'Sharing live for ${_formatDurationForDisplay()}', // <-- FIX: Uses correct text
+                  'Sharing live for ${_formatDurationForDisplay()}',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Theme.of(context).primaryColor),
                 ),
@@ -168,9 +283,46 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           ],
         );
 
-    // ... (other cases)
+      case 'front_camera':
+      case 'back_camera':
+        return ElevatedButton.icon(
+          icon: const Icon(Icons.camera_alt),
+          label: Text(widget.serviceType == 'front_camera'
+              ? 'Open Front Camera'
+              : 'Open Back Camera'),
+          onPressed: () => _handleImageSample(widget.serviceType),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Theme.of(context).primaryColor,
+            foregroundColor: Colors.white,
+          ),
+        );
+
+      case 'front_video':
+      case 'back_video':
+        return ElevatedButton.icon(
+          icon: const Icon(Icons.videocam),
+          label: Text(widget.serviceType == 'front_video'
+              ? 'Record with Front Camera'
+              : 'Record with Back Camera'),
+          onPressed: () => _handleVideoSample(widget.serviceType),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Theme.of(context).primaryColor,
+            foregroundColor: Colors.white,
+          ),
+        );
+
+      case 'front_stream':
+      case 'back_stream':
+        return ElevatedButton.icon(
+          icon: const Icon(Icons.play_arrow),
+          label: const Text('Start Live Stream'),
+          onPressed: _startVideoStream,
+        );
+      case 'audio':
+        return const Center(child: Text('Record Audio (Not Implemented)'));
+
       default:
-        return Text('Task UI for ${widget.serviceType}');
+        return Text('Unknown service type: ${widget.serviceType}');
     }
   }
 

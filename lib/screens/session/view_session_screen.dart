@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:streamix/services/location_service.dart';
+import 'package:video_player/video_player.dart';
 
 class ViewSessionScreen extends StatefulWidget {
   final String requestId;
@@ -20,14 +21,12 @@ class ViewSessionScreen extends StatefulWidget {
 
 class _ViewSessionScreenState extends State<ViewSessionScreen> {
 
-  // --- THIS IS THE NEW LOGIC ---
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('Viewing: ${widget.serviceType}'),
       ),
-      // We listen to the TICKET document to get the status
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
             .collection('requests')
@@ -40,10 +39,31 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
 
           var data = snapshot.data!.data() as Map<String, dynamic>;
           String status = data['status'];
+          String? mediaUrl = data['mediaUrl'];
 
-          // Now we show the correct UI based on the status
-          // --- FIX: Show "Session Ended" ---
           if (status == 'completed') {
+
+            if (widget.serviceType == 'front_camera' || widget.serviceType == 'back_camera') {
+              if (mediaUrl != null) {
+                return Center(child: Image.network(mediaUrl,
+                  loadingBuilder: (context, child, progress) {
+                    if (progress == null) return child;
+                    return const CircularProgressIndicator();
+                  },
+                ));
+              } else {
+                return const Center(child: Text('Error: Media URL not found.'));
+              }
+            }
+
+            if (widget.serviceType == 'front_video' || widget.serviceType == 'back_video') {
+              if (mediaUrl != null) {
+                return _VideoPlayerWidget(videoUrl: mediaUrl);
+              } else {
+                return const Center(child: Text('Error: Media URL not found.'));
+              }
+            }
+
             return const Center(
               child: Text(
                 'Session has ended.',
@@ -53,7 +73,6 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           }
 
           if (status == 'accepted') {
-            // The session is live! Show the correct viewer.
             return _buildViewer(widget.serviceType);
           }
 
@@ -66,26 +85,104 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
       ),
     );
   }
-  // --- END OF NEW LOGIC ---
 
-  // This helper builds the correct viewer widget
+  // This helper builds the correct viewer widget for LIVE sessions
   Widget _buildViewer(String serviceType) {
     switch (serviceType) {
       case 'location':
         return _LocationViewer(requestId: widget.requestId);
 
-    // ... (other cases)
+      case 'front_camera':
+      case 'back_camera':
+        return const Center(child: Text('Waiting for sender to take photo...'));
+
+      case 'front_video':
+      case 'back_video':
+        return const Center(child: Text('Waiting for sender to record video...'));
+
+    // ... (other placeholders)
       default:
-        return Text('Viewer for ${widget.serviceType}');
+        return Text('Viewer for ${serviceType}');
     }
   }
 }
 
-// --- LOCATION VIEWER WIDGET (Unchanged) ---
+// --- VIDEO PLAYER WIDGET ---
+class _VideoPlayerWidget extends StatefulWidget {
+  final String videoUrl;
+  const _VideoPlayerWidget({required this.videoUrl});
+
+  @override
+  State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
+}
+
+class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
+  late VideoPlayerController _controller;
+  late Future<void> _initializeVideoPlayerFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(
+      Uri.parse(widget.videoUrl),
+    );
+    _initializeVideoPlayerFuture = _controller.initialize();
+    _controller.setLooping(true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder(
+      future: _initializeVideoPlayerFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done) {
+          return Center(
+            child: AspectRatio(
+              aspectRatio: _controller.value.aspectRatio,
+              child: Stack(
+                alignment: Alignment.bottomCenter,
+                children: [
+                  VideoPlayer(_controller),
+                  IconButton(
+                    iconSize: 60,
+                    color: Colors.white.withOpacity(0.8),
+                    icon: Icon(
+                      _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _controller.value.isPlaying
+                            ? _controller.pause()
+                            : _controller.play();
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          );
+        } else {
+          return const Center(
+            child: CircularProgressIndicator(),
+          );
+        }
+      },
+    );
+  }
+}
+// --- END NEW WIDGET ---
+
+
+// --- LOCATION VIEWER WIDGET ---
 class _LocationViewer extends StatefulWidget {
   final String requestId;
   const _LocationViewer({required this.requestId});
-
   @override
   State<_LocationViewer> createState() => _LocationViewerState();
 }
@@ -97,6 +194,7 @@ class _LocationViewerState extends State<_LocationViewer> {
 
   @override
   Widget build(BuildContext context) {
+    // --- THIS IS THE COMPLETE BUILD METHOD ---
     return StreamBuilder<Map<String, dynamic>>(
       stream: _locationService.getSessionStream(widget.requestId),
       builder: (context, snapshot) {
