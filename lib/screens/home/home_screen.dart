@@ -3,8 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:streamix/screens/chat/chat_screen.dart';
 import 'package:streamix/screens/requests/requests_list_screen.dart';
-import 'package:streamix/screens/settings/settings_screen.dart'; // <-- 1. IMPORT
+import 'package:streamix/screens/settings/settings_screen.dart';
 import 'package:streamix/services/auth_service.dart';
+import 'package:streamix/services/ticket_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -15,6 +16,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final AuthService _authService = AuthService();
+  final TicketService _ticketService = TicketService();
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
   String _searchQuery = "";
 
@@ -32,7 +34,6 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Streamix'),
         actions: [
-          // --- 2. NEW SETTINGS BUTTON ---
           IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
@@ -43,9 +44,6 @@ class _HomeScreenState extends State<HomeScreen> {
               );
             },
           ),
-          // --- END NEW BUTTON ---
-
-          // Logout Button
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Logout',
@@ -53,7 +51,6 @@ class _HomeScreenState extends State<HomeScreen> {
               _authService.signOut();
             },
           ),
-          // Sync User Button
           IconButton(
             icon: const Icon(Icons.sync),
             tooltip: 'Sync Users',
@@ -74,8 +71,17 @@ class _HomeScreenState extends State<HomeScreen> {
             child: TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                labelText: 'Search users by name or email...',
+                hintText: 'Search users by name or email...',
                 prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(30.0),
+                  borderSide: BorderSide.none,
+                ),
+                filled: true,
+                fillColor: Theme.of(context).brightness == Brightness.light
+                    ? Colors.grey[200]
+                    : Theme.of(context).colorScheme.surface,
+                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
                   icon: const Icon(Icons.clear),
@@ -110,23 +116,42 @@ class _HomeScreenState extends State<HomeScreen> {
                   return const Center(child: Text('No users found.'));
                 }
 
+                // --- NEW: DEBUGGING PRINT ---
+                print('--- DEBUG: Filtering user list ---');
+                print('Current User ID: $_currentUserId');
+                // --- END NEW ---
+
                 // --- Filter Logic ---
                 final users = snapshot.data!.docs.where((doc) {
-                  if (doc['uid'] == _currentUserId) {
+                  final data = doc.data() as Map<String, dynamic>;
+
+                  // --- NEW: DEBUGGING PRINT ---
+                  print('Checking user: ${data['email']}, uid: ${data['uid']}');
+                  // --- END NEW ---
+
+                  // Don't show the currently logged-in user in the list
+                  if (data['uid'] == _currentUserId) {
+                    print('-> Filtering out self.');
                     return false;
                   }
+
                   if (_searchQuery.isEmpty) {
+                    print('-> Including (no search).');
                     return true;
                   }
-                  final data = doc.data() as Map<String, dynamic>;
+
                   final name = (data['name'] as String? ?? '').toLowerCase();
                   final email = (data['email'] as String? ?? '').toLowerCase();
-                  return name.contains(_searchQuery) || email.contains(_searchQuery);
+
+                  bool matches = name.contains(_searchQuery) || email.contains(_searchQuery);
+                  print('-> Search result: $matches');
+                  return matches;
+
                 }).toList();
                 // --- End Filter Logic ---
 
                 if (users.isEmpty) {
-                  return const Center(child: Text('No users match your search.'));
+                  return const Center(child: Text('No other users found.'));
                 }
 
                 return ListView.builder(
@@ -142,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       leading: CircleAvatar(
                         backgroundColor: Theme.of(context).primaryColor,
                         foregroundColor: Colors.white,
-                        child: Text(userName[0].toUpperCase()),
+                        child: Text(userName.isNotEmpty ? userName[0].toUpperCase() : '?'),
                       ),
                       title: Text(userName),
                       subtitle: Text(userEmail),
@@ -166,19 +191,33 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       // --- "All Requests" Button ---
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const RequestsListScreen(),
+      floatingActionButton: StreamBuilder<QuerySnapshot>(
+        stream: _ticketService.getIncomingRequestsStream(),
+        builder: (context, snapshot) {
+          int requestCount = 0;
+          if (snapshot.hasData) {
+            requestCount = snapshot.data!.docs.length;
+          }
+
+          return Badge(
+            label: Text('$requestCount'),
+            isLabelVisible: requestCount > 0,
+            child: FloatingActionButton.extended(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const RequestsListScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.inbox),
+              label: const Text('My Requests'),
+              backgroundColor: Theme.of(context).colorScheme.secondary,
+              foregroundColor: Colors.black,
             ),
           );
         },
-        icon: const Icon(Icons.inbox),
-        label: const Text('My Requests'),
-        backgroundColor: Theme.of(context).colorScheme.secondary,
-        foregroundColor: Colors.black,
       ),
     );
   }

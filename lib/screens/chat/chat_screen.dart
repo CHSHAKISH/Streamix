@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:streamix/screens/chat/request_dialog.dart';
+import 'package:streamix/screens/session/view_session_screen.dart';
 import 'package:streamix/services/ticket_service.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -55,27 +56,25 @@ class _ChatScreenState extends State<ChatScreen> {
                 var requests = snapshot.data!.docs;
 
                 return ListView.builder(
-                  reverse: true, // Shows latest at the bottom
-                  padding: const EdgeInsets.all(8.0), // Add padding
+                  reverse: true,
+                  padding: const EdgeInsets.all(8.0),
                   itemCount: requests.length,
                   itemBuilder: (context, index) {
                     var data = requests[index].data() as Map<String, dynamic>;
+                    String requestId = requests[index].id;
                     bool isMe = data['requesterId'] == _currentUserId;
 
-                    // --- UPDATED ---
-                    // Use Align to push bubbles left or right
                     return Align(
                       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-                      child: _buildRequestBubble(context, data, isMe),
+                      child: _buildRequestBubble(context, data, isMe, requestId),
                     );
-                    // --- END UPDATE ---
                   },
                 );
               },
             ),
           ),
 
-          // --- Request Button Bar ---
+          // --- 1. THIS IS THE MISSING REQUEST BAR ---
           Container(
             padding: const EdgeInsets.all(12.0),
             decoration: BoxDecoration(
@@ -106,16 +105,22 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
+          // --- END OF MISSING BAR ---
         ],
       ),
     );
   }
 
-  // --- UPDATED HELPER WIDGET ---
-  Widget _buildRequestBubble(BuildContext context, Map<String, dynamic> data, bool isMe) {
+  // --- 2. THIS IS THE IMPROVED BUBBLE UI ---
+  Widget _buildRequestBubble(BuildContext context, Map<String, dynamic> data, bool isMe, String requestId) {
     var service = data['serviceType'];
     var status = data['status'];
     var startTime = (data['startTime'] as Timestamp).toDate();
+
+    // Get duration
+    int durationInSeconds = data['durationInSeconds'] ?? 0;
+    String durationText =
+        "${(durationInSeconds / 60).floor()} min ${durationInSeconds % 60} sec";
 
     // Get service icon
     IconData icon = Icons.help;
@@ -124,23 +129,25 @@ class _ChatScreenState extends State<ChatScreen> {
     if (service.contains('audio')) icon = Icons.mic;
     if (service.contains('camera') || service == 'image_sample') icon = Icons.camera_alt;
 
-    // --- NEW COLOR AND STATUS LOGIC ---
-    // Set colors based on sender (me vs. them)
-    final bubbleColor = isMe ? Theme.of(context).primaryColor.withOpacity(0.15) : Colors.grey[200];
-    final textColor = Colors.black87;
+    // Set colors
+    final bubbleColor = isMe ? Theme.of(context).primaryColor : Colors.grey[200];
+    final textColor = isMe ? Colors.white : Colors.black87;
 
     // Set status icon and color
     IconData statusIcon = Icons.pending_outlined;
-    Color statusColor = Colors.orange.shade700;
+    Color statusColor = isMe ? Colors.white70 : Colors.orange.shade700;
     if (status == 'accepted') {
       statusIcon = Icons.check_circle_outline;
-      statusColor = Colors.green.shade700;
+      statusColor = isMe ? Colors.white : Colors.green.shade700;
     }
     if (status == 'denied') {
       statusIcon = Icons.cancel_outlined;
-      statusColor = Colors.red.shade700;
+      statusColor = isMe ? Colors.white70 : Colors.red.shade700;
     }
-    // --- END NEW LOGIC ---
+    if (status == 'completed') {
+      statusIcon = Icons.task_alt;
+      statusColor = isMe ? Colors.white70 : Colors.grey[700]!;
+    }
 
     String title = isMe ? 'You requested $service' : '${data['requesterName']} requested $service';
     String time = DateFormat('MMM d, h:mm a').format(startTime);
@@ -148,42 +155,78 @@ class _ChatScreenState extends State<ChatScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       margin: const EdgeInsets.symmetric(vertical: 4),
-      // Limit the width of the bubble
       constraints: BoxConstraints(
         maxWidth: MediaQuery.of(context).size.width * 0.75,
       ),
       decoration: BoxDecoration(
         color: bubbleColor,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.only(
+          topLeft: const Radius.circular(16),
+          topRight: const Radius.circular(16),
+          bottomLeft: isMe ? const Radius.circular(16) : const Radius.circular(0),
+          bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(16),
+        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min, // Make row wrap content
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: Theme.of(context).primaryColor),
-          const SizedBox(width: 12),
-          // Flexible allows text to wrap neatly
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: textColor)),
-                Text('At: $time', style: TextStyle(color: textColor.withOpacity(0.8))),
-                const SizedBox(height: 4),
-                // New status row with icon
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: isMe ? Colors.white : Theme.of(context).primaryColor, size: 30),
+              const SizedBox(width: 12),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(statusIcon, color: statusColor, size: 16),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Status: $status',
-                      style: TextStyle(fontStyle: FontStyle.italic, color: statusColor, fontWeight: FontWeight.w600),
-                    ),
+                    Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: textColor, fontSize: 16)),
+                    Text('At: $time', style: TextStyle(color: textColor.withOpacity(0.8))),
+                    Text('For: $durationText', style: TextStyle(color: textColor.withOpacity(0.8))),
                   ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
+          const SizedBox(height: 8),
+          // Status row
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(statusIcon, color: statusColor, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                'Status: $status',
+                style: TextStyle(fontStyle: FontStyle.italic, color: statusColor, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+
+          // "View" Button
+          if (status == 'accepted' && isMe)
+            Padding(
+              padding: const EdgeInsets.only(top: 10.0),
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.remove_red_eye_outlined, size: 18),
+                label: const Text('View Live'),
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ViewSessionScreen(
+                        requestId: requestId,
+                        serviceType: data['serviceType'],
+                      ),
+                    ),
+                  );
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.secondary,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  textStyle: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            )
         ],
       ),
     );

@@ -6,7 +6,6 @@ class TicketService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
-  /// --- UPDATED ---
   /// Creates a new scheduled request
   Future<String> createScheduledRequest({
     required String peerUserId,
@@ -27,7 +26,7 @@ class TicketService {
         'serviceType': serviceType,
         'startTime': startTime,
         'endTime': endTime,
-        'status': 'pending', // pending -> accepted -> denied
+        'status': 'pending', // pending -> accepted -> denied -> completed
         'createdAt': Timestamp.now(),
       });
       return "Success";
@@ -36,13 +35,8 @@ class TicketService {
     }
   }
 
-  /// --- NEW ---
   /// Gets the chat/request history between the current user and a peer
   Stream<QuerySnapshot> getChatHistoryStream(String peerUserId) {
-    // This query is complex: it gets all documents where
-    // (I am the requester AND you are the peer)
-    // OR
-    // (You are the requester AND I am the peer)
     return _firestore
         .collection('requests')
         .where(
@@ -61,7 +55,6 @@ class TicketService {
         .snapshots();
   }
 
-  /// --- NEW ---
   /// Gets all incoming requests for the current user that are 'pending'
   Stream<QuerySnapshot> getIncomingRequestsStream() {
     return _firestore
@@ -72,11 +65,18 @@ class TicketService {
         .snapshots();
   }
 
-  /// --- NEW ---
   /// Accept or Deny an incoming request
   Future<void> updateRequestStatus(String requestId, bool accepted) async {
     await _firestore.collection('requests').doc(requestId).update({
       'status': accepted ? 'accepted' : 'denied',
+    });
+  }
+
+  /// --- NEW FUNCTION ---
+  /// Marks an accepted request as 'completed'
+  Future<void> completeRequest(String requestId) async {
+    await _firestore.collection('requests').doc(requestId).update({
+      'status': 'completed',
     });
   }
 }

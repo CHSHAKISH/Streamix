@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:streamix/screens/session/active_session_screen.dart';
 import 'package:streamix/services/ticket_service.dart';
 
 class RequestsListScreen extends StatefulWidget {
@@ -42,6 +43,11 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
               String time = DateFormat('MMM d, h:mm a')
                   .format((data['startTime'] as Timestamp).toDate());
 
+              // --- FIX: Read the correct duration field ---
+              // Use 300 (5 min) as a fallback for old requests
+              int durationInSeconds = data['durationInSeconds'] ?? 300;
+              // --- END FIX ---
+
               return Card(
                 margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: Padding(
@@ -63,7 +69,6 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          // Deny Button
                           TextButton(
                             onPressed: () {
                               _ticketService.updateRequestStatus(requestId, false);
@@ -71,10 +76,20 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                             child: const Text('Deny', style: TextStyle(color: Colors.red)),
                           ),
                           const SizedBox(width: 12),
-                          // Accept Button
                           ElevatedButton(
                             onPressed: () {
                               _ticketService.updateRequestStatus(requestId, true);
+
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ActiveSessionScreen(
+                                    requestId: requestId,
+                                    serviceType: service,
+                                    durationInSeconds: durationInSeconds, // <-- PASS DURATION
+                                  ),
+                                ),
+                              );
                             },
                             child: const Text('Accept'),
                           ),
