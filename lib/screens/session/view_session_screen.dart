@@ -1,12 +1,13 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:streamix/services/location_service.dart';
+import 'package:streamix/services/signaling_service.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_sound/flutter_sound.dart';
-// Note: We'll need to add signaling_service.dart and flutter_webrtc back
-// when we fix the live stream feature.
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 class ViewSessionScreen extends StatefulWidget {
   final String requestId;
@@ -103,6 +104,10 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
       case 'location':
         return _LocationViewer(requestId: widget.requestId);
 
+      case 'front_stream':
+      case 'back_stream':
+        return _VideoStreamViewer(requestId: widget.requestId);
+
       case 'front_camera':
       case 'back_camera':
         return const Center(child: Text('Waiting for sender to take photo...'));
@@ -112,49 +117,156 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
       case 'audio':
         return const Center(child: Text('Waiting for sender to record audio...'));
 
-    // ... (other placeholders)
       default:
         return Text('Viewer for ${serviceType}');
     }
   }
 }
 
+// --- NEW WIDGET FOR LIVE VIDEO ---
+class _VideoStreamViewer extends StatefulWidget {
+  final String requestId;
+  const _VideoStreamViewer({required this.requestId});
+
+  @override
+  State<_VideoStreamViewer> createState() => _VideoStreamViewerState();
+}
+
+class _VideoStreamViewerState extends State<_VideoStreamViewer> {
+  final SignalingService _signalingService = SignalingService();
+  RTCPeerConnection? _peerConnection;
+  final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
+  StreamSubscription? _sessionSub;
+  StreamSubscription? _candidateSub;
+
+  final Map<String, dynamic> _iceConfig = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+    ],
+    'sdpSemantics': 'unified-plan',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _initialize();
+  }
+
+  Future<void> _initialize() async {
+    await _remoteRenderer.initialize();
+    _peerConnection = await createPeerConnection(_iceConfig);
+
+    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
+      print('REQUESTER: ICE Connection State: $state');
+    };
+
+    // Listen for the remote video track
+    _peerConnection?.onTrack = (RTCTrackEvent event) {
+      if (event.streams.isNotEmpty) {
+        print("--- REQUESTER: GOT REMOTE STREAM ---");
+        setState(() {
+          _remoteRenderer.srcObject = event.streams[0];
+        });
+      }
+    };
+
+    // Send our candidates to the Sender
+    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+      _signalingService.addCandidate(widget.requestId, candidate, true); // true = isRequester
+    };
+
+    // Listen for the Sender's offer
+    _sessionSub =
+        _signalingService.getSessionStream(widget.requestId).listen((doc) async {
+          if (doc.exists) {
+            var data = doc.data() as Map<String, dynamic>;
+
+            if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
+              var offer = RTCSessionDescription(
+                data['offer']['sdp'],
+                data['offer']['type'],
+              );
+
+              await _peerConnection?.setRemoteDescription(offer);
+
+              // Create and send an answer
+              RTCSessionDescription answer = await _peerConnection!.createAnswer();
+              await _peerConnection!.setLocalDescription(answer);
+              await _signalingService.createAnswer(widget.requestId, answer);
+            }
+          }
+        });
+
+    // Listen for the Sender's candidates
+    _candidateSub = _signalingService
+        .getCandidateStream(widget.requestId, true)
+        .listen((snapshot) {
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          var data = change.doc.data() as Map<String, dynamic>;
+          _peerConnection?.addCandidate(RTCIceCandidate(
+            data['candidate'],
+            data['sdpMid'],
+            data['sdpMLineIndex'],
+          ));
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _sessionSub?.cancel();
+    _candidateSub?.cancel();
+    _peerConnection?.dispose();
+    _remoteRenderer.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black,
+        border: Border.all(color: Colors.grey),
+      ),
+      child: RTCVideoView(_remoteRenderer),
+    );
+  }
+}
+// --- END NEW WIDGET ---
+
+
 // --- AUDIO PLAYER WIDGET ---
 class _AudioPlayerWidget extends StatefulWidget {
   final String audioUrl;
   const _AudioPlayerWidget({required this.audioUrl});
-
   @override
   State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
 }
-
 class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   final FlutterSoundPlayer _audioPlayer = FlutterSoundPlayer();
   bool _isPlayerReady = false;
   bool _isPlaying = false;
-
   @override
   void initState() {
     super.initState();
     _initAudioPlayer();
   }
-
   Future<void> _initAudioPlayer() async {
     await _audioPlayer.openPlayer();
     setState(() {
       _isPlayerReady = true;
     });
   }
-
   @override
   void dispose() {
     _audioPlayer.closePlayer();
     super.dispose();
   }
-
   Future<void> _togglePlayer() async {
     if (!_isPlayerReady) return;
-
     if (_isPlaying) {
       await _audioPlayer.stopPlayer();
       setState(() { _isPlaying = false; });
@@ -169,7 +281,6 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
       setState(() { _isPlaying = true; });
     }
   }
-
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -198,15 +309,12 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoUrl;
   const _VideoPlayerWidget({required this.videoUrl});
-
   @override
   State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
 }
-
 class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
   late Future<void> _initializeVideoPlayerFuture;
-
   @override
   void initState() {
     super.initState();
@@ -216,13 +324,11 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
     _initializeVideoPlayerFuture = _controller.initialize();
     _controller.setLooping(true);
   }
-
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
-
   @override
   Widget build(BuildContext context) {
     return FutureBuilder(
@@ -271,12 +377,10 @@ class _LocationViewer extends StatefulWidget {
   @override
   State<_LocationViewer> createState() => _LocationViewerState();
 }
-
 class _LocationViewerState extends State<_LocationViewer> {
   final LocationService _locationService = LocationService();
   final MapController _mapController = MapController();
   LatLng? _senderPosition;
-
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Map<String, dynamic>>(

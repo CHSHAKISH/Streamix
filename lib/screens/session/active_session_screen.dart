@@ -35,14 +35,18 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   final SignalingService _signalingService = SignalingService();
   final SupabaseStorageService _supabaseStorage = SupabaseStorageService();
 
+  // Audio
   final FlutterSoundRecorder _audioRecorder = FlutterSoundRecorder();
   bool _isRecording = false;
   String? _audioPath;
 
+  // Location
   final Location _location = Location();
   StreamSubscription<LocationData>? _locationSubscription;
   bool _isSharing = false;
   Timer? _sessionTimer;
+
+  // WebRTC
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
@@ -55,7 +59,9 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   final Map<String, dynamic> _iceConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
-    ]
+      {'urls': 'stun:stun1.l.google.com:19302'},
+    ],
+    'sdpSemantics': 'unified-plan',
   };
 
   @override
@@ -109,15 +115,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     final int minutes = (widget.durationInSeconds / 60).floor();
     final int seconds = widget.durationInSeconds % 60;
     return "$minutes min ${seconds} sec";
-  }
-
-  void _toggleMute() {
-    if (_localStream == null) return;
-    final audioTrack = _localStream!.getAudioTracks().first;
-    setState(() {
-      _isMuted = !_isMuted;
-      audioTrack.enabled = !_isMuted;
-    });
   }
 
   // --- Location Sharing ---
@@ -299,18 +296,90 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     if (mounted) setState(() { _isUploading = false; });
   }
 
-  // --- (Buggy Feature) Video Streaming ---
-  Future<void> _startVideoStream() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Live Stream feature not enabled.')),
-    );
-    // _startSessionTimer();
+  // --- FULL: Live Video Stream Logic ---
+  void _toggleMute() {
+    if (_localStream == null) return;
+    final audioTrack = _localStream!.getAudioTracks().first;
+    setState(() {
+      _isMuted = !_isMuted;
+      audioTrack.enabled = !_isMuted;
+    });
   }
+
+  Future<void> _startVideoStream() async {
+    await [Permission.camera, Permission.microphone].request();
+
+    _peerConnection = await createPeerConnection(_iceConfig);
+
+    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
+      print('SENDER: ICE Connection State: $state');
+    };
+
+    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+      _signalingService.addCandidate(widget.requestId, candidate, false);
+    };
+
+    final facingMode = widget.serviceType == 'front_stream' ? 'user' : 'environment';
+    _localStream = await navigator.mediaDevices.getUserMedia({
+      'audio': true,
+      'video': {'facingMode': facingMode}
+    });
+
+    _localRenderer.srcObject = _localStream;
+
+    _localStream?.getTracks().forEach((track) {
+      _peerConnection?.addTrack(track, _localStream!);
+    });
+
+    RTCSessionDescription offer = await _peerConnection!.createOffer();
+    await _peerConnection!.setLocalDescription(offer);
+    await _signalingService.createOffer(widget.requestId, offer);
+
+    _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
+      if (doc.exists) {
+        var data = doc.data() as Map<String, dynamic>;
+        if (data['answer'] != null && _peerConnection?.getRemoteDescription() == null) {
+          var answer = RTCSessionDescription(
+            data['answer']['sdp'],
+            data['answer']['type'],
+          );
+          await _peerConnection?.setRemoteDescription(answer);
+        }
+      }
+    });
+
+    _candidateSub = _signalingService.getCandidateStream(widget.requestId, false).listen((snapshot) {
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          var data = change.doc.data() as Map<String, dynamic>;
+          _peerConnection?.addCandidate(RTCIceCandidate(
+            data['candidate'],
+            data['sdpMid'],
+            data['sdpMLineIndex'],
+          ));
+        }
+      }
+    });
+
+    setState(() { _isStreaming = true; });
+    _startSessionTimer();
+  }
+
   Future<void> _stopVideoStream() async {
     _sessionTimer?.cancel();
+    _localStream?.getTracks().forEach((track) => track.stop());
+    await _localStream?.dispose();
+    await _peerConnection?.close();
+    await _peerConnection?.dispose();
+    _sessionSub?.cancel();
+    _candidateSub?.cancel();
     await _ticketService.completeRequest(widget.requestId);
-    // ...
+
+    setState(() { _isStreaming = false; });
+    if (mounted) Navigator.pop(context);
   }
+  // --- END FULL ---
+
 
   // --- Main Build Function ---
   Widget _buildTaskWidget() {
@@ -427,10 +496,55 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
 
       case 'front_stream':
       case 'back_stream':
-        return ElevatedButton.icon(
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Start Live Stream'),
-          onPressed: _startVideoStream,
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (_isStreaming)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Text(
+                  'Streaming live for ${_formatDurationForDisplay()}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).primaryColor),
+                ),
+              ),
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  border: Border.all(color: Colors.grey),
+                ),
+                child: RTCVideoView(_localRenderer, mirror: true),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                ElevatedButton.icon(
+                  icon: Icon(_isStreaming ? Icons.stop_circle : Icons.play_circle),
+                  label: Text(_isStreaming ? 'Stop Stream' : 'Start Stream'),
+                  onPressed: _isStreaming ? _stopVideoStream : _startVideoStream,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _isStreaming ? Colors.red : Theme.of(context).primaryColor,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+                  ),
+                ),
+                IconButton.filled(
+                  icon: Icon(_isMuted ? Icons.mic_off : Icons.mic),
+                  iconSize: 30,
+                  padding: const EdgeInsets.all(16),
+                  onPressed: _isStreaming ? _toggleMute : null,
+                  style: IconButton.styleFrom(
+                    backgroundColor: _isMuted ? Colors.red : Colors.blueAccent,
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ],
         );
 
       default:
