@@ -4,6 +4,9 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:streamix/services/location_service.dart';
 import 'package:video_player/video_player.dart';
+import 'package:flutter_sound/flutter_sound.dart';
+// Note: We'll need to add signaling_service.dart and flutter_webrtc back
+// when we fix the live stream feature.
 
 class ViewSessionScreen extends StatefulWidget {
   final String requestId;
@@ -64,6 +67,14 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
               }
             }
 
+            if (widget.serviceType == 'audio') {
+              if (mediaUrl != null) {
+                return _AudioPlayerWidget(audioUrl: mediaUrl);
+              } else {
+                return const Center(child: Text('Error: Media URL not found.'));
+              }
+            }
+
             return const Center(
               child: Text(
                 'Session has ended.',
@@ -95,10 +106,11 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
       case 'front_camera':
       case 'back_camera':
         return const Center(child: Text('Waiting for sender to take photo...'));
-
       case 'front_video':
       case 'back_video':
         return const Center(child: Text('Waiting for sender to record video...'));
+      case 'audio':
+        return const Center(child: Text('Waiting for sender to record audio...'));
 
     // ... (other placeholders)
       default:
@@ -106,6 +118,81 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
     }
   }
 }
+
+// --- AUDIO PLAYER WIDGET ---
+class _AudioPlayerWidget extends StatefulWidget {
+  final String audioUrl;
+  const _AudioPlayerWidget({required this.audioUrl});
+
+  @override
+  State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
+}
+
+class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
+  final FlutterSoundPlayer _audioPlayer = FlutterSoundPlayer();
+  bool _isPlayerReady = false;
+  bool _isPlaying = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAudioPlayer();
+  }
+
+  Future<void> _initAudioPlayer() async {
+    await _audioPlayer.openPlayer();
+    setState(() {
+      _isPlayerReady = true;
+    });
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.closePlayer();
+    super.dispose();
+  }
+
+  Future<void> _togglePlayer() async {
+    if (!_isPlayerReady) return;
+
+    if (_isPlaying) {
+      await _audioPlayer.stopPlayer();
+      setState(() { _isPlaying = false; });
+    } else {
+      await _audioPlayer.startPlayer(
+        fromURI: widget.audioUrl,
+        codec: Codec.aacADTS,
+        whenFinished: () {
+          setState(() { _isPlaying = false; });
+        },
+      );
+      setState(() { _isPlaying = true; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          IconButton.filled(
+            icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
+            iconSize: 60,
+            onPressed: _isPlayerReady ? _togglePlayer : null,
+            style: IconButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(_isPlaying ? 'Playing...' : 'Tap to play audio', style: const TextStyle(fontSize: 16)),
+        ],
+      ),
+    );
+  }
+}
+
 
 // --- VIDEO PLAYER WIDGET ---
 class _VideoPlayerWidget extends StatefulWidget {
@@ -176,8 +263,6 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
     );
   }
 }
-// --- END NEW WIDGET ---
-
 
 // --- LOCATION VIEWER WIDGET ---
 class _LocationViewer extends StatefulWidget {
@@ -194,7 +279,6 @@ class _LocationViewerState extends State<_LocationViewer> {
 
   @override
   Widget build(BuildContext context) {
-    // --- THIS IS THE COMPLETE BUILD METHOD ---
     return StreamBuilder<Map<String, dynamic>>(
       stream: _locationService.getSessionStream(widget.requestId),
       builder: (context, snapshot) {

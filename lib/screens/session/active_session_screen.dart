@@ -10,6 +10,8 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:location/location.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_sound/flutter_sound.dart';
+import 'package:path_provider/path_provider.dart';
 
 class ActiveSessionScreen extends StatefulWidget {
   final String requestId;
@@ -33,7 +35,10 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   final SignalingService _signalingService = SignalingService();
   final SupabaseStorageService _supabaseStorage = SupabaseStorageService();
 
-  // State variables
+  final FlutterSoundRecorder _audioRecorder = FlutterSoundRecorder();
+  bool _isRecording = false;
+  String? _audioPath;
+
   final Location _location = Location();
   StreamSubscription<LocationData>? _locationSubscription;
   bool _isSharing = false;
@@ -59,6 +64,13 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     if (widget.serviceType.contains('stream')) {
       _localRenderer.initialize();
     }
+    if (widget.serviceType == 'audio') {
+      _initAudioRecorder();
+    }
+  }
+
+  Future<void> _initAudioRecorder() async {
+    await _audioRecorder.openRecorder();
   }
 
   @override
@@ -71,6 +83,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     _localStream?.dispose();
     _peerConnection?.dispose();
     _localRenderer.dispose();
+    _audioRecorder.closeRecorder();
     super.dispose();
   }
 
@@ -87,16 +100,16 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
       _stopLocationSharing();
     } else if (widget.serviceType.contains('stream') && _isStreaming) {
       _stopVideoStream();
+    } else if (widget.serviceType == 'audio' && _isRecording) {
+      _stopAudioRecording();
     }
   }
 
-  // --- THIS FUNCTION IS NOW COMPLETE ---
   String _formatDurationForDisplay() {
     final int minutes = (widget.durationInSeconds / 60).floor();
     final int seconds = widget.durationInSeconds % 60;
     return "$minutes min ${seconds} sec";
   }
-  // --- END ---
 
   void _toggleMute() {
     if (_localStream == null) return;
@@ -230,6 +243,62 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
+  // --- Audio Sample Logic ---
+  Future<void> _startAudioRecording() async {
+    var status = await Permission.microphone.request();
+    if (status.isDenied) {
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Microphone permission is required.')),
+      );
+      return;
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    _audioPath = '${tempDir.path}/streamix_audio.aac';
+
+    await _audioRecorder.startRecorder(
+      toFile: _audioPath,
+      codec: Codec.aacADTS,
+    );
+
+    setState(() { _isRecording = true; });
+    _startSessionTimer();
+  }
+
+  Future<void> _stopAudioRecording() async {
+    await _audioRecorder.stopRecorder();
+    _sessionTimer?.cancel();
+    setState(() { _isRecording = false; _isUploading = true; });
+
+    if (_audioPath == null) {
+      setState(() { _isUploading = false; });
+      return;
+    }
+
+    File audioFile = File(_audioPath!);
+
+    String? downloadUrl = await _supabaseStorage.uploadRequestMedia(
+      widget.requestId,
+      audioFile,
+      'aac',
+    );
+
+    if (downloadUrl != null) {
+      await _ticketService.completeRequestWithMedia(widget.requestId, downloadUrl);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Audio uploaded successfully!')),
+        );
+        Navigator.pop(context);
+      }
+    } else {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Error uploading audio.')),
+      );
+    }
+    if (mounted) setState(() { _isUploading = false; });
+  }
+
   // --- (Buggy Feature) Video Streaming ---
   Future<void> _startVideoStream() async {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -240,7 +309,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   Future<void> _stopVideoStream() async {
     _sessionTimer?.cancel();
     await _ticketService.completeRequest(widget.requestId);
-    /* ... */
+    // ...
   }
 
   // --- Main Build Function ---
@@ -311,6 +380,51 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           ),
         );
 
+      case 'audio':
+        return Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              _isRecording ? 'Recording...' : 'Ready to record audio',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 18,
+                color: _isRecording ? Colors.red : Theme.of(context).primaryColor,
+              ),
+            ),
+            const SizedBox(height: 20),
+            Icon(
+              _isRecording ? Icons.mic : Icons.mic_none,
+              size: 80,
+              color: _isRecording ? Colors.red : Theme.of(context).primaryColor,
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              icon: Icon(_isRecording ? Icons.stop : Icons.play_arrow),
+              label: Text(_isRecording
+                  ? 'Stop Recording'
+                  : 'Start Recording'),
+              onPressed: _isRecording
+                  ? _stopAudioRecording
+                  : _startAudioRecording,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isRecording ? Colors.red : Theme.of(context).primaryColor,
+                foregroundColor: Colors.white,
+              ),
+            ),
+            if (_isRecording)
+              Padding(
+                padding: const EdgeInsets.only(top: 20),
+                child: Text(
+                  'Recording for ${_formatDurationForDisplay()}',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).primaryColor),
+                ),
+              ),
+          ],
+        );
+
       case 'front_stream':
       case 'back_stream':
         return ElevatedButton.icon(
@@ -318,8 +432,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           label: const Text('Start Live Stream'),
           onPressed: _startVideoStream,
         );
-      case 'audio':
-        return const Center(child: Text('Record Audio (Not Implemented)'));
 
       default:
         return Text('Unknown service type: ${widget.serviceType}');
