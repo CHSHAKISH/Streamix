@@ -51,16 +51,6 @@ class _HomeScreenState extends State<HomeScreen> {
               _authService.signOut();
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.sync),
-            tooltip: 'Sync Users',
-            onPressed: () {
-              setState(() {});
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('User list synced!')),
-              );
-            },
-          ),
         ],
       ),
       body: Column(
@@ -101,85 +91,151 @@ class _HomeScreenState extends State<HomeScreen> {
               },
             ),
           ),
-          // --- User List ---
+
+          // --- User List with Sorting ---
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
+              // 1. Fetch All Users
               stream: FirebaseFirestore.instance.collection('users').snapshots(),
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
+              builder: (context, userSnapshot) {
+                if (userSnapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-                if (snapshot.hasError) {
-                  return const Center(child: Text('Something went wrong.'));
-                }
-                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                if (!userSnapshot.hasData || userSnapshot.data!.docs.isEmpty) {
                   return const Center(child: Text('No users found.'));
                 }
 
-                // --- NEW: DEBUGGING PRINT ---
-                print('--- DEBUG: Filtering user list ---');
-                print('Current User ID: $_currentUserId');
-                // --- END NEW ---
+                // 2. Fetch Requests (Without sorting in DB to avoid Index errors)
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('requests')
+                      .where(Filter.or(
+                    Filter('requesterId', isEqualTo: _currentUserId),
+                    Filter('peerUserId', isEqualTo: _currentUserId),
+                  ))
+                      .snapshots(),
+                  builder: (context, requestSnapshot) {
 
-                // --- Filter Logic ---
-                final users = snapshot.data!.docs.where((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
+                    // Calculate "Last Interaction Time" for each user
+                    Map<String, DateTime> lastInteractionMap = {};
 
-                  // --- NEW: DEBUGGING PRINT ---
-                  print('Checking user: ${data['email']}, uid: ${data['uid']}');
-                  // --- END NEW ---
+                    if (requestSnapshot.hasData) {
+                      print("DEBUG: Found ${requestSnapshot.data!.docs.length} requests involving me.");
 
-                  // Don't show the currently logged-in user in the list
-                  if (data['uid'] == _currentUserId) {
-                    print('-> Filtering out self.');
-                    return false;
-                  }
+                      for (var doc in requestSnapshot.data!.docs) {
+                        var data = doc.data() as Map<String, dynamic>;
+                        String rId = data['requesterId'];
+                        String pId = data['peerUserId'];
+                        Timestamp? time;
 
-                  if (_searchQuery.isEmpty) {
-                    print('-> Including (no search).');
-                    return true;
-                  }
+                        // Try to get start time, fallback to createdAt if scheduled time is null
+                        if (data['startTime'] != null) {
+                          time = data['startTime'] as Timestamp;
+                        } else if (data['createdAt'] != null) {
+                          time = data['createdAt'] as Timestamp;
+                        }
 
-                  final name = (data['name'] as String? ?? '').toLowerCase();
-                  final email = (data['email'] as String? ?? '').toLowerCase();
+                        // Determine who the "other" person is
+                        String otherUserId = (rId == _currentUserId) ? pId : rId;
 
-                  bool matches = name.contains(_searchQuery) || email.contains(_searchQuery);
-                  print('-> Search result: $matches');
-                  return matches;
+                        // Save the LATEST time we found for this user
+                        if (time != null) {
+                          DateTime docTime = time.toDate();
+                          // If we haven't seen this user yet, OR this doc is newer than what we have
+                          if (!lastInteractionMap.containsKey(otherUserId) ||
+                              docTime.isAfter(lastInteractionMap[otherUserId]!)) {
+                            lastInteractionMap[otherUserId] = docTime;
+                          }
+                        }
+                      }
+                    } else if (requestSnapshot.hasError) {
+                      print("DEBUG ERROR: ${requestSnapshot.error}");
+                    }
 
-                }).toList();
-                // --- End Filter Logic ---
+                    // Filter the Users based on Search
+                    final users = userSnapshot.data!.docs.where((doc) {
+                      final data = doc.data() as Map<String, dynamic>;
 
-                if (users.isEmpty) {
-                  return const Center(child: Text('No other users found.'));
-                }
+                      // Hide Self
+                      if (data['uid'] == _currentUserId) return false;
 
-                return ListView.builder(
-                  itemCount: users.length,
-                  itemBuilder: (context, index) {
-                    final userDoc = users[index];
-                    final userData = userDoc.data() as Map<String, dynamic>;
-                    final userName = userData['name'] ?? 'No Name';
-                    final userEmail = userData['email'] ?? 'No Email';
-                    final peerUserId = userData['uid'];
+                      // Search Filter
+                      if (_searchQuery.isEmpty) return true;
+                      final name = (data['name'] as String? ?? '').toLowerCase();
+                      final email = (data['email'] as String? ?? '').toLowerCase();
+                      return name.contains(_searchQuery) || email.contains(_searchQuery);
+                    }).toList();
 
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: Theme.of(context).primaryColor,
-                        foregroundColor: Colors.white,
-                        child: Text(userName.isNotEmpty ? userName[0].toUpperCase() : '?'),
-                      ),
-                      title: Text(userName),
-                      subtitle: Text(userEmail),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => ChatScreen(
-                              peerUserId: peerUserId,
-                              peerUserName: userName,
+                    // --- SORTING LOGIC ---
+                    users.sort((a, b) {
+                      final dataA = a.data() as Map<String, dynamic>;
+                      final dataB = b.data() as Map<String, dynamic>;
+                      final uidA = dataA['uid'];
+                      final uidB = dataB['uid'];
+
+                      DateTime? timeA = lastInteractionMap[uidA];
+                      DateTime? timeB = lastInteractionMap[uidB];
+
+                      // 1. If both have interaction times, sort by time (Desc: Newest First)
+                      if (timeA != null && timeB != null) {
+                        return timeB.compareTo(timeA);
+                      }
+
+                      // 2. If A has time but B doesn't, A comes first
+                      if (timeA != null) return -1;
+
+                      // 3. If B has time but A doesn't, B comes first
+                      if (timeB != null) return 1;
+
+                      // 4. If neither has time, sort Alphabetically by Name
+                      String nameA = (dataA['name'] as String? ?? '').toLowerCase();
+                      String nameB = (dataB['name'] as String? ?? '').toLowerCase();
+                      return nameA.compareTo(nameB);
+                    });
+
+                    if (users.isEmpty) {
+                      return const Center(child: Text('No other users found.'));
+                    }
+
+                    return ListView.builder(
+                      itemCount: users.length,
+                      itemBuilder: (context, index) {
+                        final userDoc = users[index];
+                        final userData = userDoc.data() as Map<String, dynamic>;
+                        final userName = userData['name'] ?? 'No Name';
+                        final userEmail = userData['email'] ?? 'No Email';
+                        final peerUserId = userData['uid'];
+
+                        // Check if this is a recent contact to show a small indicator
+                        bool isRecent = lastInteractionMap.containsKey(peerUserId);
+
+                        return ListTile(
+                          leading: CircleAvatar(
+                            backgroundColor: isRecent ? Colors.green : Theme.of(context).primaryColor,
+                            foregroundColor: Colors.white,
+                            child: Text(userName.isNotEmpty ? userName[0].toUpperCase() : '?'),
+                          ),
+                          title: Text(
+                            userName,
+                            style: TextStyle(
+                                fontWeight: isRecent ? FontWeight.bold : FontWeight.normal
                             ),
                           ),
+                          subtitle: Text(userEmail),
+                          trailing: isRecent
+                              ? const Icon(Icons.history, size: 16, color: Colors.green)
+                              : null,
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ChatScreen(
+                                  peerUserId: peerUserId,
+                                  peerUserName: userName,
+                                ),
+                              ),
+                            );
+                          },
                         );
                       },
                     );
