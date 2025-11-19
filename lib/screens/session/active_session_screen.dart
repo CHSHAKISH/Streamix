@@ -54,6 +54,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   bool _isStreaming = false;
   StreamSubscription? _sessionSub;
   StreamSubscription? _candidateSub;
+
+  // --- NEW: Mute State ---
   bool _isMuted = false;
 
   // Auto Capture
@@ -76,12 +78,18 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   void initState() {
     super.initState();
 
+    // 1. WebRTC Initialization
     if (widget.serviceType.contains('stream')) {
-      _initRenderers();
+      _initRenderers().then((_) {
+        // Auto-start stream when renderer is ready
+        _startVideoStream();
+      });
     }
+
     if (widget.serviceType == 'audio') {
       _initAudioRecorder();
     }
+
     if (widget.serviceType.contains('camera')) {
       _initCameraAndAutoCapture();
     }
@@ -102,6 +110,108 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     super.dispose();
   }
 
+  Future<void> _initRenderers() async {
+    await _localRenderer.initialize();
+    if (mounted) setState(() {});
+  }
+
+  // --- STREAMING LOGIC (Fixed) ---
+  void _toggleMute() {
+    if (_localStream == null) return;
+    final audioTracks = _localStream!.getAudioTracks();
+    if (audioTracks.isNotEmpty) {
+      bool newState = !_isMuted;
+      // enabled = true means MIC IS ON. enabled = false means MUTED.
+      audioTracks[0].enabled = !newState;
+      setState(() {
+        _isMuted = newState;
+      });
+    }
+  }
+
+  Future<void> _startVideoStream() async {
+    try {
+      print("--- SENDER: Starting Stream ---");
+      await [Permission.camera, Permission.microphone].request();
+
+      _peerConnection = await createPeerConnection(_iceConfig);
+
+      _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+        _signalingService.addCandidate(widget.requestId, candidate, false);
+      };
+
+      final facingMode = widget.serviceType == 'front_stream' ? 'user' : 'environment';
+
+      _localStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': {
+          'facingMode': facingMode,
+          'width': 1280, // Optional: Constrain width for better performance
+          'height': 720
+        }
+      });
+
+      _localRenderer.srcObject = _localStream;
+
+      _localStream?.getTracks().forEach((track) {
+        _peerConnection?.addTrack(track, _localStream!);
+      });
+
+      // Create Offer
+      RTCSessionDescription offer = await _peerConnection!.createOffer();
+      await _peerConnection!.setLocalDescription(offer);
+
+      // Send Offer to Firestore
+      print("--- SENDER: Writing Offer to DB ---");
+      await _signalingService.createOffer(widget.requestId, offer);
+      print("--- SENDER: Offer Written! ---");
+
+      // Listen for Answer
+      _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
+        if (doc.exists) {
+          var data = doc.data() as Map<String, dynamic>;
+          if (data['answer'] != null && _peerConnection?.getRemoteDescription() == null) {
+            print("--- SENDER: Received Answer ---");
+            var answer = RTCSessionDescription(data['answer']['sdp'], data['answer']['type']);
+            await _peerConnection?.setRemoteDescription(answer);
+          }
+        }
+      });
+
+      _candidateSub = _signalingService.getCandidateStream(widget.requestId, false).listen((snapshot) {
+        for (var change in snapshot.docChanges) {
+          if (change.type == DocumentChangeType.added) {
+            var data = change.doc.data() as Map<String, dynamic>;
+            _peerConnection?.addCandidate(RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex']));
+          }
+        }
+      });
+
+      if (mounted) setState(() { _isStreaming = true; });
+      _startSessionTimer();
+    } catch (e) {
+      print("--- SENDER ERROR: $e ---");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Stream Error: $e"), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<void> _stopVideoStream() async {
+    _sessionTimer?.cancel();
+    _localStream?.getTracks().forEach((track) => track.stop());
+    await _localStream?.dispose();
+    await _peerConnection?.close();
+    await _peerConnection?.dispose();
+    _sessionSub?.cancel();
+    _candidateSub?.cancel();
+    await _ticketService.completeRequest(widget.requestId);
+    setState(() { _isStreaming = false; });
+    if (mounted) Navigator.pop(context);
+  }
+  // ----------------------------
+
+  // --- AUTO CAPTURE ---
   Future<void> _initCameraAndAutoCapture() async {
     var status = await Permission.camera.request();
     if (status.isDenied) {
@@ -151,6 +261,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
+  // --- UPLOAD ---
   Future<void> _uploadMedia(File file, String ext, String typeName) async {
     setState(() { _isUploading = true; });
 
@@ -162,11 +273,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
 
     if (downloadUrl != null) {
       await _ticketService.updateRequestMedia(widget.requestId, downloadUrl);
-
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$typeName sent successfully!')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$typeName sent successfully!')));
         setState(() {
           _isUploading = false;
           _autoCaptureStatus = "Sent! You can close this screen.";
@@ -174,17 +282,10 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
       }
     } else {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error uploading $typeName.')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error uploading $typeName.')));
         setState(() { _isUploading = false; });
       }
     }
-  }
-
-  Future<void> _initRenderers() async {
-    await _localRenderer.initialize();
-    if (mounted) setState(() {});
   }
 
   Future<void> _initAudioRecorder() async {
@@ -282,74 +383,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
-  void _toggleMute() {
-    if (_localStream == null) return;
-    final audioTrack = _localStream!.getAudioTracks().first;
-    setState(() {
-      _isMuted = !_isMuted;
-      audioTrack.enabled = !_isMuted;
-    });
-  }
-
-  Future<void> _startVideoStream() async {
-    await [Permission.camera, Permission.microphone].request();
-    _peerConnection = await createPeerConnection(_iceConfig);
-
-    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      _signalingService.addCandidate(widget.requestId, candidate, false);
-    };
-
-    final facingMode = widget.serviceType == 'front_stream' ? 'user' : 'environment';
-    _localStream = await navigator.mediaDevices.getUserMedia({
-      'audio': true,
-      'video': {'facingMode': facingMode}
-    });
-
-    _localRenderer.srcObject = _localStream;
-    _localStream?.getTracks().forEach((track) {
-      _peerConnection?.addTrack(track, _localStream!);
-    });
-
-    RTCSessionDescription offer = await _peerConnection!.createOffer();
-    await _peerConnection!.setLocalDescription(offer);
-    await _signalingService.createOffer(widget.requestId, offer);
-
-    _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
-      if (doc.exists) {
-        var data = doc.data() as Map<String, dynamic>;
-        if (data['answer'] != null && _peerConnection?.getRemoteDescription() == null) {
-          var answer = RTCSessionDescription(data['answer']['sdp'], data['answer']['type']);
-          await _peerConnection?.setRemoteDescription(answer);
-        }
-      }
-    });
-
-    _candidateSub = _signalingService.getCandidateStream(widget.requestId, false).listen((snapshot) {
-      for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          var data = change.doc.data() as Map<String, dynamic>;
-          _peerConnection?.addCandidate(RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex']));
-        }
-      }
-    });
-
-    setState(() { _isStreaming = true; });
-    _startSessionTimer();
-  }
-
-  Future<void> _stopVideoStream() async {
-    _sessionTimer?.cancel();
-    _localStream?.getTracks().forEach((track) => track.stop());
-    await _localStream?.dispose();
-    await _peerConnection?.close();
-    await _peerConnection?.dispose();
-    _sessionSub?.cancel();
-    _candidateSub?.cancel();
-    await _ticketService.completeRequest(widget.requestId);
-    setState(() { _isStreaming = false; });
-    if (mounted) Navigator.pop(context);
-  }
-
+  // --- BUILD UI ---
   Widget _buildTaskWidget() {
     if (_isUploading) {
       return const Center(
@@ -430,7 +464,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           ),
         );
 
-    // --- FIX 2: Centered Audio UI ---
       case 'audio':
         return Center(
           child: Column(
@@ -450,23 +483,62 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
 
       case 'front_stream':
       case 'back_stream':
-        return Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        return Stack(
           children: [
-            Expanded(
-              child: Container(
-                color: Colors.black,
-                child: RTCVideoView(_localRenderer, mirror: true),
+            Container(
+              color: Colors.black,
+              width: double.infinity,
+              height: double.infinity,
+              child: RTCVideoView(_localRenderer, mirror: true, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover),
+            ),
+
+            // --- MUTE BUTTON OVERLAY ---
+            Positioned(
+              bottom: 30,
+              right: 30,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FloatingActionButton(
+                    heroTag: "mute_btn",
+                    onPressed: _toggleMute,
+                    backgroundColor: _isMuted ? Colors.red : Colors.white,
+                    child: Icon(
+                      _isMuted ? Icons.mic_off : Icons.mic,
+                      color: _isMuted ? Colors.white : Colors.black,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  FloatingActionButton(
+                    heroTag: "stop_btn",
+                    onPressed: _stopVideoStream,
+                    backgroundColor: Colors.red,
+                    child: const Icon(Icons.stop, color: Colors.white),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              icon: Icon(_isStreaming ? Icons.stop_circle : Icons.play_circle),
-              label: Text(_isStreaming ? 'Stop Stream' : 'Start Stream'),
-              onPressed: _isStreaming ? _stopVideoStream : _startVideoStream,
-              style: ElevatedButton.styleFrom(backgroundColor: _isStreaming ? Colors.red : Colors.blue),
-            ),
+
+            // Duration Overlay
+            if (_isStreaming)
+              Positioned(
+                top: 10,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.redAccent,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      'LIVE: ${_formatDurationForDisplay()}',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ),
           ],
         );
 
@@ -479,10 +551,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('Active: ${widget.serviceType}')),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: _buildTaskWidget(),
-      ),
+      body: _buildTaskWidget(), // Removed Padding for full screen video
     );
   }
 }

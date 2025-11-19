@@ -16,7 +16,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
   final TicketService _ticketService = TicketService();
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
-  // --- NEW: Selection State ---
+  // Selection State
   bool _isSelectionMode = false;
   Set<String> _selectedIds = {};
 
@@ -24,9 +24,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
     setState(() {
       if (_selectedIds.contains(requestId)) {
         _selectedIds.remove(requestId);
-        if (_selectedIds.isEmpty) {
-          _isSelectionMode = false;
-        }
+        if (_selectedIds.isEmpty) _isSelectionMode = false;
       } else {
         _selectedIds.add(requestId);
       }
@@ -46,18 +44,14 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
   }
 
   Future<void> _deleteSelected() async {
-    // Show confirmation dialog
     bool confirm = await showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("Delete Requests"),
-        content: Text("Delete ${_selectedIds.length} selected requests? This cannot be undone."),
+        content: Text("Delete ${_selectedIds.length} selected requests?"),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text("Cancel")),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text("Delete", style: TextStyle(color: Colors.red)),
-          ),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text("Delete", style: TextStyle(color: Colors.red))),
         ],
       ),
     ) ?? false;
@@ -70,9 +64,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
         _selectedIds.clear();
         _isSelectionMode = false;
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Requests deleted.")));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Requests deleted.")));
     }
   }
 
@@ -82,64 +74,46 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
       stream: FirebaseFirestore.instance
           .collection('requests')
           .where('peerUserId', isEqualTo: _currentUserId)
-      // We removed the status filter so we can see 'completed' ones too if you want,
-      // or keep it restricted. For now, let's show everything so we can delete old ones.
           .snapshots(),
       builder: (context, snapshot) {
-        // If waiting
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return Scaffold(
-              appBar: AppBar(title: const Text('My Requests')),
-              body: const Center(child: CircularProgressIndicator())
-          );
+          return Scaffold(appBar: AppBar(title: const Text('My Requests')), body: const Center(child: CircularProgressIndicator()));
         }
 
         var requests = snapshot.data?.docs ?? [];
 
         // Sort Newest First
         requests.sort((a, b) {
-          var dataA = a.data() as Map<String, dynamic>;
-          var dataB = b.data() as Map<String, dynamic>;
-          Timestamp timeA = dataA['startTime'] ?? Timestamp.now();
-          Timestamp timeB = dataB['startTime'] ?? Timestamp.now();
+          Timestamp timeA = (a.data() as Map<String, dynamic>)['startTime'] ?? Timestamp.now();
+          Timestamp timeB = (b.data() as Map<String, dynamic>)['startTime'] ?? Timestamp.now();
           return timeB.compareTo(timeA);
         });
 
         return Scaffold(
+          backgroundColor: Colors.grey[100], // Light background for better contrast
           appBar: AppBar(
             leading: _isSelectionMode
-                ? IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => setState(() {
-                  _isSelectionMode = false;
-                  _selectedIds.clear();
-                })
-            )
+                ? IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() { _isSelectionMode = false; _selectedIds.clear(); }))
                 : null,
             title: Text(_isSelectionMode ? '${_selectedIds.length} Selected' : 'My Requests'),
             actions: [
               if (_isSelectionMode) ...[
                 IconButton(
                   icon: Icon(_selectedIds.length == requests.length ? Icons.deselect : Icons.select_all),
-                  tooltip: 'Select All',
                   onPressed: () => _selectAll(requests),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.delete),
-                  tooltip: 'Delete Selected',
-                  onPressed: _deleteSelected,
-                ),
+                IconButton(icon: const Icon(Icons.delete), onPressed: _deleteSelected),
               ]
             ],
           ),
           body: requests.isEmpty
-              ? const Center(child: Text('You have no requests.'))
+              ? const Center(child: Text('You have no requests.', style: TextStyle(color: Colors.grey, fontSize: 16)))
               : ListView.builder(
+            padding: const EdgeInsets.only(top: 10, bottom: 80),
             itemCount: requests.length,
             itemBuilder: (context, index) {
               var data = requests[index].data() as Map<String, dynamic>;
               String requestId = requests[index].id;
-
               String service = data['serviceType'];
               String requester = data['requesterName'];
               String status = data['status'];
@@ -148,31 +122,32 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
               DateTime endTime = (data['endTime'] as Timestamp).toDate();
               final now = DateTime.now();
 
-              // --- LOGIC: Determine Display Status ---
-              String displayStatus = status.toUpperCase();
-              Color statusColor = Colors.blue;
-              bool isExpired = false;
-
-              // Check Expiry
-              if (now.isAfter(endTime)) {
-                displayStatus = "DONE"; // Or "EXPIRED"
-                statusColor = Colors.grey;
-                isExpired = true;
-              } else if (status == 'accepted') {
-                statusColor = Colors.green;
-              } else if (status == 'pending') {
-                statusColor = Colors.orange;
-              } else if (status == 'denied') {
-                statusColor = Colors.red;
-              }
-
-              String timeStr = "${DateFormat('MMM d, h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}";
-              int durationInSeconds = endTime.difference(startTime).inSeconds;
-
+              bool isExpired = now.isAfter(endTime);
+              bool isDone = status == 'completed' || isExpired;
               bool isSelected = _selectedIds.contains(requestId);
 
+              // Colors and Text
+              Color statusColor;
+              String statusText;
+              if (isDone) {
+                statusColor = Colors.grey;
+                statusText = "DONE";
+              } else if (status == 'accepted') {
+                statusColor = Colors.green;
+                statusText = "ACCEPTED";
+              } else if (status == 'denied') {
+                statusColor = Colors.red;
+                statusText = "DENIED";
+              } else {
+                statusColor = Colors.orange;
+                statusText = "PENDING";
+              }
+
+              String dateStr = DateFormat('MMM d').format(startTime);
+              String timeRange = "${DateFormat('h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}";
+              int durationInSeconds = endTime.difference(startTime).inSeconds;
+
               return InkWell(
-                // --- SELECTION GESTURES ---
                 onLongPress: () {
                   setState(() {
                     _isSelectionMode = true;
@@ -180,108 +155,105 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                   });
                 },
                 onTap: () {
-                  if (_isSelectionMode) {
-                    _toggleSelection(requestId);
-                  }
+                  if (_isSelectionMode) _toggleSelection(requestId);
                 },
-                child: Card(
+                child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.2) : Colors.white,
-                  shape: isSelected
-                      ? RoundedRectangleBorder(side: BorderSide(color: Theme.of(context).primaryColor, width: 2), borderRadius: BorderRadius.circular(12))
-                      : null,
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  decoration: BoxDecoration(
+                      color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.1) : Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: isSelected ? Border.all(color: Theme.of(context).primaryColor, width: 2) : null,
+                      boxShadow: [
+                        if (!isSelected) BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 4))
+                      ]
+                  ),
+                  child: IntrinsicHeight(
+                    child: Row(
                       children: [
-                        // Header Row
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              '$requester',
-                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: statusColor,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                displayStatus,
-                                style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text('Service: $service', style: const TextStyle(fontSize: 16)),
-                        Text('Scheduled: $timeStr', style: const TextStyle(fontSize: 14, color: Colors.grey)),
-                        const SizedBox(height: 16),
-
-                        // --- ACTION BUTTONS ---
-                        // Hide buttons if we are in Selection Mode (to prevent accidental clicks)
-                        // Also hide buttons if the request is Expired/Done
-                        if (!_isSelectionMode && !isExpired)
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              if (status == 'pending') ...[
-                                TextButton(
-                                  onPressed: () => _ticketService.updateRequestStatus(requestId, false),
-                                  child: const Text('Deny', style: TextStyle(color: Colors.red)),
-                                ),
-                                const SizedBox(width: 12),
-                                ElevatedButton(
-                                  onPressed: () {
-                                    _ticketService.updateRequestStatus(requestId, true);
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text("Accepted! You can start when it's time.")),
-                                    );
-                                  },
-                                  child: const Text('Accept'),
-                                ),
-                              ],
-
-                              if (status == 'accepted') ...[
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.play_arrow),
-                                  label: const Text('Start Sharing'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Theme.of(context).primaryColor,
-                                    foregroundColor: Colors.white,
-                                  ),
-                                  onPressed: () {
-                                    if (now.isBefore(startTime)) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text("Starts at ${DateFormat('h:mm a').format(startTime)}"), backgroundColor: Colors.orange),
-                                      );
-                                      return;
-                                    }
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => ActiveSessionScreen(
-                                          requestId: requestId,
-                                          serviceType: service,
-                                          durationInSeconds: durationInSeconds,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ],
-                            ],
+                        // Status Strip
+                        Container(
+                          width: 6,
+                          decoration: BoxDecoration(
+                            color: statusColor,
+                            borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), bottomLeft: Radius.circular(12)),
                           ),
+                        ),
+                        // Content
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(requester, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                                      child: Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                                    )
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text(service.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 13, color: Colors.black54, letterSpacing: 0.5)),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.calendar_today, size: 14, color: Colors.grey),
+                                    const SizedBox(width: 6),
+                                    Text("$dateStr  •  $timeRange", style: const TextStyle(fontSize: 14, color: Colors.black87)),
+                                  ],
+                                ),
 
-                        // Optional: Show "Expired" text if buttons are hidden
-                        if (isExpired && !_isSelectionMode)
-                          const Align(
-                            alignment: Alignment.centerRight,
-                            child: Text("Time Ended", style: TextStyle(color: Colors.grey, fontStyle: FontStyle.italic)),
-                          )
+                                // Action Buttons
+                                if (!_isSelectionMode && !isDone) ...[
+                                  const SizedBox(height: 16),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      if (status == 'pending') ...[
+                                        OutlinedButton(
+                                          onPressed: () => _ticketService.updateRequestStatus(requestId, false),
+                                          style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
+                                          child: const Text("Deny"),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        ElevatedButton(
+                                          onPressed: () {
+                                            _ticketService.updateRequestStatus(requestId, true);
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Accepted!")));
+                                          },
+                                          style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
+                                          child: const Text("Accept"),
+                                        ),
+                                      ],
+                                      if (status == 'accepted')
+                                        ElevatedButton.icon(
+                                          icon: const Icon(Icons.play_arrow, size: 18),
+                                          label: const Text("Start Sharing"),
+                                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                          onPressed: () {
+                                            final now = DateTime.now();
+                                            if (now.isBefore(startTime)) {
+                                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Starts at ${DateFormat('h:mm a').format(startTime)}"), backgroundColor: Colors.orange));
+                                              return;
+                                            }
+                                            if (now.isAfter(endTime)) {
+                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Expired"), backgroundColor: Colors.red));
+                                              return;
+                                            }
+                                            Navigator.push(context, MaterialPageRoute(builder: (context) => ActiveSessionScreen(requestId: requestId, serviceType: service, durationInSeconds: durationInSeconds)));
+                                          },
+                                        )
+                                    ],
+                                  )
+                                ]
+                              ],
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ),
