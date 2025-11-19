@@ -93,4 +93,9 @@ class TicketService {
       'status': 'completed',
     });
   }
+
+  /// Deletes a request document permanently
+  Future<void> deleteRequest(String requestId) async {
+    await _firestore.collection('requests').doc(requestId).delete();
+  }
 }
