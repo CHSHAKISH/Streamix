@@ -45,37 +45,25 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
 
-          if (status == 'completed') {
-
-            if (widget.serviceType == 'front_camera' || widget.serviceType == 'back_camera') {
-              if (mediaUrl != null) {
-                return Center(child: Image.network(mediaUrl,
-                  loadingBuilder: (context, child, progress) {
-                    if (progress == null) return child;
-                    return const CircularProgressIndicator();
-                  },
-                ));
-              } else {
-                return const Center(child: Text('Error: Media URL not found.'));
-              }
+          // Show Media if Available (Even if Active)
+          if (mediaUrl != null && mediaUrl.isNotEmpty) {
+            if (widget.serviceType.contains('camera')) {
+              return Center(child: Image.network(mediaUrl,
+                loadingBuilder: (context, child, progress) {
+                  if (progress == null) return child;
+                  return const CircularProgressIndicator();
+                },
+              ));
             }
-
-            if (widget.serviceType == 'front_video' || widget.serviceType == 'back_video') {
-              if (mediaUrl != null) {
-                return _VideoPlayerWidget(videoUrl: mediaUrl);
-              } else {
-                return const Center(child: Text('Error: Media URL not found.'));
-              }
+            if (widget.serviceType.contains('video')) {
+              return _VideoPlayerWidget(videoUrl: mediaUrl);
             }
-
             if (widget.serviceType == 'audio') {
-              if (mediaUrl != null) {
-                return _AudioPlayerWidget(audioUrl: mediaUrl);
-              } else {
-                return const Center(child: Text('Error: Media URL not found.'));
-              }
+              return _AudioPlayerWidget(audioUrl: mediaUrl);
             }
+          }
 
+          if (status == 'completed') {
             return const Center(
               child: Text(
                 'Session has ended.',
@@ -98,7 +86,6 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
     );
   }
 
-  // This helper builds the correct viewer widget for LIVE sessions
   Widget _buildViewer(String serviceType) {
     switch (serviceType) {
       case 'location':
@@ -123,7 +110,6 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
   }
 }
 
-// --- UPDATED DEBUGGING WIDGET FOR LIVE VIDEO ---
 class _VideoStreamViewer extends StatefulWidget {
   final String requestId;
   const _VideoStreamViewer({required this.requestId});
@@ -139,7 +125,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   StreamSubscription? _sessionSub;
   StreamSubscription? _candidateSub;
 
-  // Debugging State
   String _status = "Initializing...";
   bool _hasStream = false;
 
@@ -164,31 +149,20 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
     setState(() => _status = "Creating PeerConnection...");
     _peerConnection = await createPeerConnection(_iceConfig);
 
-    // --- THIS IS THE NEW DEBUG LINE ---
     if (mounted) {
       setState(() => _status = "Waiting for Sender to join...");
     }
 
-    // 1. Monitor Connection State
     _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
-      print('REQUESTER: ICE Connection State: $state');
-      if (mounted) {
-        setState(() => _status = "ICE State: ${state.toString().split('.').last}");
-      }
+      if (mounted) setState(() => _status = "ICE State: ${state.toString().split('.').last}");
     };
 
     _peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
-      print('REQUESTER: Connection State: $state');
-      if (mounted) {
-        setState(() => _status = "Connection: ${state.toString().split('.').last}");
-      }
+      if (mounted) setState(() => _status = "Connection: ${state.toString().split('.').last}");
     };
 
-    // 2. Listen for Video Track
     _peerConnection?.onTrack = (RTCTrackEvent event) {
-      print("--- REQUESTER: ON TRACK EVENT FIRED ---");
       if (event.streams.isNotEmpty) {
-        print("--- REQUESTER: GOT STREAM ---");
         if (mounted) {
           setState(() {
             _remoteRenderer.srcObject = event.streams[0];
@@ -199,31 +173,19 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
       }
     };
 
-    // 3. ICE Candidates
     _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
       _signalingService.addCandidate(widget.requestId, candidate, true);
     };
 
-    // 4. Signaling Listener
     _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
       if (doc.exists) {
         var data = doc.data() as Map<String, dynamic>;
-
         if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
-          print("--- REQUESTER: RECEIVED OFFER ---");
           if (mounted) setState(() => _status = "Received Offer...");
-
-          var offer = RTCSessionDescription(
-            data['offer']['sdp'],
-            data['offer']['type'],
-          );
-
+          var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
           await _peerConnection?.setRemoteDescription(offer);
-
           var answer = await _peerConnection!.createAnswer();
-          print("--- REQUESTER: CREATED ANSWER ---");
-
-          await _peerConnection!.setLocalDescription(answer);
+          await _peerConnection?.setLocalDescription(answer);
           await _signalingService.createAnswer(widget.requestId, answer);
           if (mounted) setState(() => _status = "Sent Answer. Connecting...");
         }
@@ -234,11 +196,7 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
       for (var change in snapshot.docChanges) {
         if (change.type == DocumentChangeType.added) {
           var data = change.doc.data() as Map<String, dynamic>;
-          _peerConnection?.addCandidate(RTCIceCandidate(
-            data['candidate'],
-            data['sdpMid'],
-            data['sdpMLineIndex'],
-          ));
+          _peerConnection?.addCandidate(RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex']));
         }
       }
     });
@@ -259,7 +217,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
       color: Colors.black,
       child: Stack(
         children: [
-          // The Video View
           if (_hasStream)
             Positioned.fill(
               child: RTCVideoView(
@@ -267,11 +224,9 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
                 objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
               ),
             ),
-
-          // The Debug Status Overlay
           Center(
             child: _hasStream
-                ? null // Hide text if stream is active
+                ? null
                 : Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -297,10 +252,7 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
     );
   }
 }
-// --- END UPDATED WIDGET ---
 
-
-// --- AUDIO PLAYER WIDGET ---
 class _AudioPlayerWidget extends StatefulWidget {
   final String audioUrl;
   const _AudioPlayerWidget({required this.audioUrl});
@@ -318,9 +270,7 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   }
   Future<void> _initAudioPlayer() async {
     await _audioPlayer.openPlayer();
-    setState(() {
-      _isPlayerReady = true;
-    });
+    setState(() { _isPlayerReady = true; });
   }
   @override
   void dispose() {
@@ -336,9 +286,7 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
       await _audioPlayer.startPlayer(
         fromURI: widget.audioUrl,
         codec: Codec.aacADTS,
-        whenFinished: () {
-          setState(() { _isPlaying = false; });
-        },
+        whenFinished: () { setState(() { _isPlaying = false; }); },
       );
       setState(() { _isPlaying = true; });
     }
@@ -366,8 +314,6 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   }
 }
 
-
-// --- VIDEO PLAYER WIDGET ---
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoUrl;
   const _VideoPlayerWidget({required this.videoUrl});
@@ -380,9 +326,7 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.videoUrl),
-    );
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
     _initializeVideoPlayerFuture = _controller.initialize();
     _controller.setLooping(true);
   }
@@ -407,14 +351,10 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
                   IconButton(
                     iconSize: 60,
                     color: Colors.white.withOpacity(0.8),
-                    icon: Icon(
-                      _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                    ),
+                    icon: Icon(_controller.value.isPlaying ? Icons.pause : Icons.play_arrow),
                     onPressed: () {
                       setState(() {
-                        _controller.value.isPlaying
-                            ? _controller.pause()
-                            : _controller.play();
+                        _controller.value.isPlaying ? _controller.pause() : _controller.play();
                       });
                     },
                   ),
@@ -423,16 +363,13 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
             ),
           );
         } else {
-          return const Center(
-            child: CircularProgressIndicator(),
-          );
+          return const Center(child: CircularProgressIndicator());
         }
       },
     );
   }
 }
 
-// --- LOCATION VIEWER WIDGET ---
 class _LocationViewer extends StatefulWidget {
   final String requestId;
   const _LocationViewer({required this.requestId});
@@ -448,7 +385,6 @@ class _LocationViewerState extends State<_LocationViewer> {
     return StreamBuilder<Map<String, dynamic>>(
       stream: _locationService.getSessionStream(widget.requestId),
       builder: (context, snapshot) {
-
         if (snapshot.hasData && snapshot.data != null) {
           var data = snapshot.data!;
           if (data['lat'] != null && data['lng'] != null) {
@@ -456,7 +392,6 @@ class _LocationViewerState extends State<_LocationViewer> {
             _mapController.move(_senderPosition!, 16.0);
           }
         }
-
         return FlutterMap(
           mapController: _mapController,
           options: MapOptions(
@@ -475,11 +410,7 @@ class _LocationViewerState extends State<_LocationViewer> {
                     point: _senderPosition!,
                     width: 80,
                     height: 80,
-                    child: Icon(
-                      Icons.location_on,
-                      color: Theme.of(context).primaryColor,
-                      size: 40,
-                    ),
+                    child: Icon(Icons.location_on, color: Theme.of(context).primaryColor, size: 40),
                   ),
                 ],
               ),
@@ -487,14 +418,8 @@ class _LocationViewerState extends State<_LocationViewer> {
               Center(
                 child: Container(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.6),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text(
-                    'Waiting for sender to start sharing...',
-                    style: TextStyle(color: Colors.white, fontSize: 16),
-                  ),
+                  decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), borderRadius: BorderRadius.circular(8)),
+                  child: const Text('Waiting for sender to start sharing...', style: TextStyle(color: Colors.white, fontSize: 16)),
                 ),
               ),
           ],

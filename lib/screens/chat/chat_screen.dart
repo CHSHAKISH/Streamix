@@ -74,7 +74,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ),
 
-          // --- 1. THIS IS THE MISSING REQUEST BAR ---
+          // --- Request Bar ---
           Container(
             padding: const EdgeInsets.all(12.0),
             decoration: BoxDecoration(
@@ -105,22 +105,27 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
-          // --- END OF MISSING BAR ---
         ],
       ),
     );
   }
 
-  // --- 2. THIS IS THE IMPROVED BUBBLE UI ---
   Widget _buildRequestBubble(BuildContext context, Map<String, dynamic> data, bool isMe, String requestId) {
     var service = data['serviceType'];
     var status = data['status'];
-    var startTime = (data['startTime'] as Timestamp).toDate();
+    String? mediaUrl = data['mediaUrl'];
 
-    // Get duration
-    int durationInSeconds = data['durationInSeconds'] ?? 0;
-    String durationText =
-        "${(durationInSeconds / 60).floor()} min ${durationInSeconds % 60} sec";
+    // --- NEW LOGIC: Handle Start/End Time ---
+    DateTime? startTime;
+    DateTime? endTime;
+
+    if (data['startTime'] != null) {
+      startTime = (data['startTime'] as Timestamp).toDate();
+    }
+    if (data['endTime'] != null) {
+      endTime = (data['endTime'] as Timestamp).toDate();
+    }
+    // ----------------------------------------
 
     // Get service icon
     IconData icon = Icons.help;
@@ -150,7 +155,15 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     String title = isMe ? 'You requested $service' : '${data['requesterName']} requested $service';
-    String time = DateFormat('MMM d, h:mm a').format(startTime);
+
+    // Format Time Display
+    String timeInfo = "Processing...";
+    if (startTime != null && endTime != null) {
+      String dateStr = DateFormat('MMM d').format(startTime);
+      String startStr = DateFormat('h:mm a').format(startTime);
+      String endStr = DateFormat('h:mm a').format(endTime);
+      timeInfo = "$dateStr, $startStr - $endStr";
+    }
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -180,15 +193,15 @@ class _ChatScreenState extends State<ChatScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: textColor, fontSize: 16)),
-                    Text('At: $time', style: TextStyle(color: textColor.withOpacity(0.8))),
-                    Text('For: $durationText', style: TextStyle(color: textColor.withOpacity(0.8))),
+                    // --- NEW DISPLAY TEXT ---
+                    Text(timeInfo, style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 12)),
                   ],
                 ),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          // Status row
+
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -201,14 +214,56 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
 
-          // "View" Button
-          if (status == 'accepted' && isMe)
+          // --- VIEW BUTTON LOGIC FOR USER A ---
+          if ((status == 'accepted' || status == 'completed') && isMe)
             Padding(
               padding: const EdgeInsets.only(top: 10.0),
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.remove_red_eye_outlined, size: 18),
-                label: const Text('View Live'),
+                label: const Text('View Live / File'),
                 onPressed: () {
+                  // 1. Check Logic
+                  final now = DateTime.now();
+
+                  // If completed or has media, allow view (Active Session Behavior)
+                  if (status == 'completed' || (mediaUrl != null && mediaUrl.isNotEmpty)) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => ViewSessionScreen(
+                          requestId: requestId,
+                          serviceType: data['serviceType'],
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+
+                  if (startTime != null && endTime != null) {
+                    // 2. Too Early
+                    if (now.isBefore(startTime)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text("This service will start at ${DateFormat('h:mm a').format(startTime)}"),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                      return; // Block access
+                    }
+
+                    // 3. Too Late
+                    if (now.isAfter(endTime)) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("This service has ended."),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                      return; // Block access
+                    }
+                  }
+
+                  // 4. On Time - Allow Access
                   Navigator.push(
                     context,
                     MaterialPageRoute(

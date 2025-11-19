@@ -6,12 +6,19 @@ class TicketService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
-  /// --- NEW FUNCTION ---
+  /// --- NEW FUNCTION: Update Media WITHOUT completing the session ---
+  /// This keeps the status as 'accepted' so the session remains open.
+  Future<void> updateRequestMedia(String requestId, String mediaUrl) async {
+    await _firestore.collection('requests').doc(requestId).update({
+      'mediaUrl': mediaUrl,
+    });
+  }
+
   /// Marks a request as 'completed' and saves the Supabase media URL.
   Future<void> completeRequestWithMedia(String requestId, String mediaUrl) async {
     await _firestore.collection('requests').doc(requestId).update({
       'status': 'completed',
-      'mediaUrl': mediaUrl, // Save the public URL of the image
+      'mediaUrl': mediaUrl,
     });
   }
 
@@ -23,7 +30,6 @@ class TicketService {
     required Timestamp endTime,
   }) async {
     try {
-      // Get current user's data to store their name/email
       DocumentSnapshot userDoc =
       await _firestore.collection('users').doc(_currentUserId).get();
       Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
@@ -35,7 +41,7 @@ class TicketService {
         'serviceType': serviceType,
         'startTime': startTime,
         'endTime': endTime,
-        'status': 'pending', // pending -> accepted -> denied -> completed
+        'status': 'pending',
         'createdAt': Timestamp.now(),
       });
       return "Success";
@@ -81,7 +87,6 @@ class TicketService {
     });
   }
 
-  /// --- NEW FUNCTION ---
   /// Marks an accepted request as 'completed'
   Future<void> completeRequest(String requestId) async {
     await _firestore.collection('requests').doc(requestId).update({

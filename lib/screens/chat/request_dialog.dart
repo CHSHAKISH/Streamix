@@ -15,7 +15,6 @@ class _RequestDialogState extends State<RequestDialog> {
   final TicketService _ticketService = TicketService();
 
   String _selectedService = 'location';
-  // Default to 5 minutes from now (safe default)
   DateTime _startTime = DateTime.now().add(const Duration(minutes: 5));
   DateTime _endTime = DateTime.now().add(const Duration(minutes: 10));
   bool _isLoading = false;
@@ -57,13 +56,11 @@ class _RequestDialogState extends State<RequestDialog> {
     setState(() {
       if (isStartTime) {
         _startTime = newDateTime;
-        // Ensure end time is always after start time
         if (_endTime.isBefore(_startTime)) {
           _endTime = _startTime.add(const Duration(minutes: 5));
         }
       } else {
         _endTime = newDateTime;
-        // Ensure start time is always before end time
         if (_startTime.isAfter(_endTime)) {
           _startTime = _endTime.subtract(const Duration(minutes: 5));
         }
@@ -72,12 +69,10 @@ class _RequestDialogState extends State<RequestDialog> {
   }
 
   void _sendRequest() async {
-    // --- VALIDATION START: 2-Minute Rule ---
+    // --- VALIDATION: 2-Minute Rule ---
     final DateTime now = DateTime.now();
-    // Calculate the minimum allowed time (2 minutes from now)
     final DateTime minAllowedTime = now.add(const Duration(minutes: 2));
 
-    // If start time is BEFORE the minimum allowed time, show error and stop.
     if (_startTime.isBefore(minAllowedTime)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -87,7 +82,7 @@ class _RequestDialogState extends State<RequestDialog> {
       );
       return;
     }
-    // --- VALIDATION END ---
+    // --- END VALIDATION ---
 
     setState(() { _isLoading = true; });
 
@@ -103,7 +98,7 @@ class _RequestDialogState extends State<RequestDialog> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Request sent successfully!')),
         );
-        Navigator.pop(context); // Close the dialog
+        Navigator.pop(context);
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(result), backgroundColor: Colors.red),
@@ -135,7 +130,6 @@ class _RequestDialogState extends State<RequestDialog> {
               ),
               const SizedBox(height: 24),
 
-              // Service Dropdown
               DropdownButtonFormField<String>(
                 value: _selectedService,
                 decoration: const InputDecoration(labelText: 'Service'),
@@ -159,7 +153,6 @@ class _RequestDialogState extends State<RequestDialog> {
               ),
               const SizedBox(height: 16),
 
-              // Start Time
               Text('Start Time', style: TextStyle(color: Colors.grey[700])),
               InkWell(
                 onTap: () => _pickDateTime(true),
@@ -180,7 +173,6 @@ class _RequestDialogState extends State<RequestDialog> {
               ),
               const SizedBox(height: 16),
 
-              // End Time
               Text('End Time', style: TextStyle(color: Colors.grey[700])),
               InkWell(
                 onTap: () => _pickDateTime(false),
@@ -201,7 +193,6 @@ class _RequestDialogState extends State<RequestDialog> {
               ),
               const SizedBox(height: 24),
 
-              // Send Button
               _isLoading
                   ? const Center(child: CircularProgressIndicator())
                   : ElevatedButton(

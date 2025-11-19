@@ -35,6 +35,16 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Streamix'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.sync),
+            tooltip: 'Sync Users',
+            onPressed: () {
+              setState(() {});
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('User list synced!')),
+              );
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
             onPressed: () {
@@ -55,7 +65,6 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
-          // --- Search Bar ---
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: TextField(
@@ -92,7 +101,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
-          // --- User List with Sorting ---
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               // 1. Fetch All Users
@@ -105,7 +113,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   return const Center(child: Text('No users found.'));
                 }
 
-                // 2. Fetch Requests (Without sorting in DB to avoid Index errors)
+                // 2. Fetch Requests
                 return StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('requests')
@@ -116,50 +124,36 @@ class _HomeScreenState extends State<HomeScreen> {
                       .snapshots(),
                   builder: (context, requestSnapshot) {
 
-                    // Calculate "Last Interaction Time" for each user
                     Map<String, DateTime> lastInteractionMap = {};
 
                     if (requestSnapshot.hasData) {
-                      print("DEBUG: Found ${requestSnapshot.data!.docs.length} requests involving me.");
-
                       for (var doc in requestSnapshot.data!.docs) {
                         var data = doc.data() as Map<String, dynamic>;
                         String rId = data['requesterId'];
                         String pId = data['peerUserId'];
                         Timestamp? time;
 
-                        // Try to get start time, fallback to createdAt if scheduled time is null
                         if (data['startTime'] != null) {
                           time = data['startTime'] as Timestamp;
                         } else if (data['createdAt'] != null) {
                           time = data['createdAt'] as Timestamp;
                         }
 
-                        // Determine who the "other" person is
                         String otherUserId = (rId == _currentUserId) ? pId : rId;
 
-                        // Save the LATEST time we found for this user
                         if (time != null) {
                           DateTime docTime = time.toDate();
-                          // If we haven't seen this user yet, OR this doc is newer than what we have
                           if (!lastInteractionMap.containsKey(otherUserId) ||
                               docTime.isAfter(lastInteractionMap[otherUserId]!)) {
                             lastInteractionMap[otherUserId] = docTime;
                           }
                         }
                       }
-                    } else if (requestSnapshot.hasError) {
-                      print("DEBUG ERROR: ${requestSnapshot.error}");
                     }
 
-                    // Filter the Users based on Search
                     final users = userSnapshot.data!.docs.where((doc) {
                       final data = doc.data() as Map<String, dynamic>;
-
-                      // Hide Self
                       if (data['uid'] == _currentUserId) return false;
-
-                      // Search Filter
                       if (_searchQuery.isEmpty) return true;
                       final name = (data['name'] as String? ?? '').toLowerCase();
                       final email = (data['email'] as String? ?? '').toLowerCase();
@@ -176,18 +170,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       DateTime? timeA = lastInteractionMap[uidA];
                       DateTime? timeB = lastInteractionMap[uidB];
 
-                      // 1. If both have interaction times, sort by time (Desc: Newest First)
-                      if (timeA != null && timeB != null) {
-                        return timeB.compareTo(timeA);
-                      }
-
-                      // 2. If A has time but B doesn't, A comes first
+                      if (timeA != null && timeB != null) return timeB.compareTo(timeA);
                       if (timeA != null) return -1;
-
-                      // 3. If B has time but A doesn't, B comes first
                       if (timeB != null) return 1;
 
-                      // 4. If neither has time, sort Alphabetically by Name
                       String nameA = (dataA['name'] as String? ?? '').toLowerCase();
                       String nameB = (dataB['name'] as String? ?? '').toLowerCase();
                       return nameA.compareTo(nameB);
@@ -205,8 +191,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         final userName = userData['name'] ?? 'No Name';
                         final userEmail = userData['email'] ?? 'No Email';
                         final peerUserId = userData['uid'];
-
-                        // Check if this is a recent contact to show a small indicator
                         bool isRecent = lastInteractionMap.containsKey(peerUserId);
 
                         return ListTile(
@@ -246,7 +230,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      // --- "All Requests" Button ---
       floatingActionButton: StreamBuilder<QuerySnapshot>(
         stream: _ticketService.getIncomingRequestsStream(),
         builder: (context, snapshot) {
@@ -254,7 +237,6 @@ class _HomeScreenState extends State<HomeScreen> {
           if (snapshot.hasData) {
             requestCount = snapshot.data!.docs.length;
           }
-
           return Badge(
             label: Text('$requestCount'),
             isLabelVisible: requestCount > 0,

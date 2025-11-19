@@ -47,7 +47,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   bool _isSharing = false;
   Timer? _sessionTimer;
 
-  // WebRTC (Live Streaming)
+  // WebRTC
   RTCPeerConnection? _peerConnection;
   MediaStream? _localStream;
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
@@ -56,7 +56,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   StreamSubscription? _candidateSub;
   bool _isMuted = false;
 
-  // --- CAMERA CONTROLLER FOR AUTO CAPTURE ---
+  // Auto Capture
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   String _autoCaptureStatus = "Initializing Camera...";
@@ -76,17 +76,12 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   void initState() {
     super.initState();
 
-    // 1. WebRTC Initialization
     if (widget.serviceType.contains('stream')) {
       _initRenderers();
     }
-
-    // 2. Audio Initialization
     if (widget.serviceType == 'audio') {
       _initAudioRecorder();
     }
-
-    // 3. Auto-Capture Initialization
     if (widget.serviceType.contains('camera')) {
       _initCameraAndAutoCapture();
     }
@@ -103,11 +98,10 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     _peerConnection?.dispose();
     _localRenderer.dispose();
     _audioRecorder.closeRecorder();
-    _cameraController?.dispose(); // Dispose camera
+    _cameraController?.dispose();
     super.dispose();
   }
 
-  // --- AUTO CAPTURE LOGIC ---
   Future<void> _initCameraAndAutoCapture() async {
     var status = await Permission.camera.request();
     if (status.isDenied) {
@@ -118,19 +112,12 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     try {
       final cameras = await availableCameras();
       final isFront = widget.serviceType == 'front_camera';
-
-      // Find the correct camera (front or back)
       final camera = cameras.firstWhere(
             (c) => c.lensDirection == (isFront ? CameraLensDirection.front : CameraLensDirection.back),
         orElse: () => cameras.first,
       );
 
-      _cameraController = CameraController(
-          camera,
-          ResolutionPreset.high,
-          enableAudio: false
-      );
-
+      _cameraController = CameraController(camera, ResolutionPreset.high, enableAudio: false);
       await _cameraController!.initialize();
       if (!mounted) return;
 
@@ -139,7 +126,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         _autoCaptureStatus = "Ready. Capturing in 3 seconds...";
       });
 
-      // Start Countdown
       _performAutoCapture();
 
     } catch (e) {
@@ -148,7 +134,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   }
 
   Future<void> _performAutoCapture() async {
-    // 3 Second Countdown
     for (int i = 3; i > 0; i--) {
       if (!mounted) return;
       setState(() => _autoCaptureStatus = "Capturing in $i...");
@@ -166,7 +151,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
-  // --- GENERIC UPLOAD FUNCTION ---
   Future<void> _uploadMedia(File file, String ext, String typeName) async {
     setState(() { _isUploading = true; });
 
@@ -177,7 +161,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     );
 
     if (downloadUrl != null) {
-      await _ticketService.completeRequestWithMedia(widget.requestId, downloadUrl);
+      // Use updateRequestMedia to keep session active
+      await _ticketService.updateRequestMedia(widget.requestId, downloadUrl);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -197,7 +182,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
       }
     }
   }
-  // --- END NEW LOGIC ---
 
   Future<void> _initRenderers() async {
     await _localRenderer.initialize();
@@ -208,7 +192,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     await _audioRecorder.openRecorder();
   }
 
-  // --- Timer Functions ---
   void _startSessionTimer() {
     _sessionTimer?.cancel();
     _sessionTimer = Timer(Duration(seconds: widget.durationInSeconds), () {
@@ -232,7 +215,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     return "$minutes min ${seconds} sec";
   }
 
-  // --- Location Sharing ---
   Future<void> _startLocationSharing() async {
     var status = await Permission.location.request();
     if (status.isDenied) {
@@ -261,7 +243,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
-  // --- Video Sample Logic ---
   Future<void> _handleVideoSample(String serviceType) async {
     final camera = serviceType == 'front_video' ? CameraDevice.front : CameraDevice.rear;
     var camStatus = await Permission.camera.request();
@@ -280,7 +261,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
-  // --- Audio Sample Logic ---
   Future<void> _startAudioRecording() async {
     var status = await Permission.microphone.request();
     if (status.isDenied) return;
@@ -303,7 +283,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
 
-  // --- Live Video Stream Logic ---
   void _toggleMute() {
     if (_localStream == null) return;
     final audioTrack = _localStream!.getAudioTracks().first;
@@ -317,12 +296,10 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     await [Permission.camera, Permission.microphone].request();
     _peerConnection = await createPeerConnection(_iceConfig);
 
-    // Candidates
     _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
       _signalingService.addCandidate(widget.requestId, candidate, false);
     };
 
-    // Local Stream
     final facingMode = widget.serviceType == 'front_stream' ? 'user' : 'environment';
     _localStream = await navigator.mediaDevices.getUserMedia({
       'audio': true,
@@ -334,12 +311,10 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
       _peerConnection?.addTrack(track, _localStream!);
     });
 
-    // Offer
     RTCSessionDescription offer = await _peerConnection!.createOffer();
     await _peerConnection!.setLocalDescription(offer);
     await _signalingService.createOffer(widget.requestId, offer);
 
-    // Listen for Answer
     _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
       if (doc.exists) {
         var data = doc.data() as Map<String, dynamic>;
@@ -350,7 +325,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
       }
     });
 
-    // Listen for Candidates
     _candidateSub = _signalingService.getCandidateStream(widget.requestId, false).listen((snapshot) {
       for (var change in snapshot.docChanges) {
         if (change.type == DocumentChangeType.added) {
@@ -377,10 +351,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     if (mounted) Navigator.pop(context);
   }
 
-  // --- Build UI ---
   Widget _buildTaskWidget() {
     if (_isUploading) {
-      // --- FIX: Center aligned uploading text ---
       return const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -417,7 +389,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           ],
         );
 
-    // --- AUTO CAPTURE UI ---
       case 'front_camera':
       case 'back_camera':
         if (!_isCameraInitialized || _cameraController == null) {
@@ -452,16 +423,18 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
 
       case 'front_video':
       case 'back_video':
-        return ElevatedButton.icon(
-          icon: const Icon(Icons.videocam),
-          label: const Text('Record Video'),
-          onPressed: () => _handleVideoSample(widget.serviceType),
+        return Center(
+          child: ElevatedButton.icon(
+            icon: const Icon(Icons.videocam),
+            label: const Text('Record Video'),
+            onPressed: () => _handleVideoSample(widget.serviceType),
+          ),
         );
 
       case 'audio':
         return Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Icon(_isRecording ? Icons.mic : Icons.mic_none, size: 80, color: _isRecording ? Colors.red : Colors.grey),
             const SizedBox(height: 20),
