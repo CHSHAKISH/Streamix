@@ -70,6 +70,8 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('requests')
@@ -82,7 +84,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
 
         var requests = snapshot.data?.docs ?? [];
 
-        // Sort Newest First
+        // Sort Newest First (Descending)
         requests.sort((a, b) {
           Timestamp timeA = (a.data() as Map<String, dynamic>)['startTime'] ?? Timestamp.now();
           Timestamp timeB = (b.data() as Map<String, dynamic>)['startTime'] ?? Timestamp.now();
@@ -90,7 +92,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
         });
 
         return Scaffold(
-          backgroundColor: Colors.grey[100], // Light background for better contrast
+          // Remove hardcoded background color to allow Theme to take over
           appBar: AppBar(
             leading: _isSelectionMode
                 ? IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() { _isSelectionMode = false; _selectedIds.clear(); }))
@@ -107,7 +109,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
             ],
           ),
           body: requests.isEmpty
-              ? const Center(child: Text('You have no requests.', style: TextStyle(color: Colors.grey, fontSize: 16)))
+              ? const Center(child: Text('You have no requests.', style: TextStyle(fontSize: 16)))
               : ListView.builder(
             padding: const EdgeInsets.only(top: 10, bottom: 80),
             itemCount: requests.length,
@@ -129,6 +131,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
               // Colors and Text
               Color statusColor;
               String statusText;
+
               if (isDone) {
                 statusColor = Colors.grey;
                 statusText = "DONE";
@@ -141,6 +144,17 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
               } else {
                 statusColor = Colors.orange;
                 statusText = "PENDING";
+              }
+
+              // Dynamic Card Color for Dark/Light mode
+              Color cardColor;
+              if (isSelected) {
+                cardColor = Theme.of(context).primaryColor.withOpacity(isDarkMode ? 0.3 : 0.1);
+              } else if (status == 'accepted') {
+                // Subtle green tint
+                cardColor = isDarkMode ? Colors.green.withOpacity(0.15) : Colors.green.shade50;
+              } else {
+                cardColor = Theme.of(context).cardColor;
               }
 
               String dateStr = DateFormat('MMM d').format(startTime);
@@ -160,11 +174,12 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                 child: Container(
                   margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
-                      color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.1) : Colors.white,
+                      color: cardColor,
                       borderRadius: BorderRadius.circular(12),
                       border: isSelected ? Border.all(color: Theme.of(context).primaryColor, width: 2) : null,
                       boxShadow: [
-                        if (!isSelected) BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 4))
+                        if (!isSelected && !isDarkMode) // Only show shadow in light mode
+                          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 4))
                       ]
                   ),
                   child: IntrinsicHeight(
@@ -191,19 +206,31 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                     Text(requester, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                                     Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-                                      child: Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                                      decoration: BoxDecoration(
+                                        color: statusColor.withOpacity(0.2), // softer background
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                          statusText,
+                                          style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)
+                                      ),
                                     )
                                   ],
                                 ),
                                 const SizedBox(height: 4),
-                                Text(service.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 13, color: Colors.black54, letterSpacing: 0.5)),
+                                Text(
+                                    service.replaceAll('_', ' ').toUpperCase(),
+                                    style: TextStyle(fontSize: 13, color: isDarkMode ? Colors.grey[400] : Colors.black54, letterSpacing: 0.5)
+                                ),
                                 const SizedBox(height: 8),
                                 Row(
                                   children: [
-                                    const Icon(Icons.calendar_today, size: 14, color: Colors.grey),
+                                    Icon(Icons.calendar_today, size: 14, color: isDarkMode ? Colors.grey[400] : Colors.grey),
                                     const SizedBox(width: 6),
-                                    Text("$dateStr  •  $timeRange", style: const TextStyle(fontSize: 14, color: Colors.black87)),
+                                    Text(
+                                        "$dateStr  •  $timeRange",
+                                        style: TextStyle(fontSize: 14, color: isDarkMode ? Colors.white70 : Colors.black87)
+                                    ),
                                   ],
                                 ),
 
@@ -216,7 +243,10 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                       if (status == 'pending') ...[
                                         OutlinedButton(
                                           onPressed: () => _ticketService.updateRequestStatus(requestId, false),
-                                          style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
+                                          style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.red,
+                                              side: const BorderSide(color: Colors.red)
+                                          ),
                                           child: const Text("Deny"),
                                         ),
                                         const SizedBox(width: 12),
@@ -225,7 +255,10 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                             _ticketService.updateRequestStatus(requestId, true);
                                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Accepted!")));
                                           },
-                                          style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
+                                          style: ElevatedButton.styleFrom(
+                                              backgroundColor: Theme.of(context).primaryColor,
+                                              foregroundColor: Colors.white
+                                          ),
                                           child: const Text("Accept"),
                                         ),
                                       ],
