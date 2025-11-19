@@ -161,7 +161,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     );
 
     if (downloadUrl != null) {
-      // Use updateRequestMedia to keep session active
       await _ticketService.updateRequestMedia(widget.requestId, downloadUrl);
 
       if (mounted) {
@@ -431,19 +430,22 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           ),
         );
 
+    // --- FIX 2: Centered Audio UI ---
       case 'audio':
-        return Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Icon(_isRecording ? Icons.mic : Icons.mic_none, size: 80, color: _isRecording ? Colors.red : Colors.grey),
-            const SizedBox(height: 20),
-            ElevatedButton.icon(
-              icon: Icon(_isRecording ? Icons.stop : Icons.play_arrow),
-              label: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
-              onPressed: _isRecording ? _stopAudioRecording : _startAudioRecording,
-            ),
-          ],
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(_isRecording ? Icons.mic : Icons.mic_none, size: 80, color: _isRecording ? Colors.red : Colors.grey),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                icon: Icon(_isRecording ? Icons.stop : Icons.play_arrow),
+                label: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
+                onPressed: _isRecording ? _stopAudioRecording : _startAudioRecording,
+              ),
+            ],
+          ),
         );
 
       case 'front_stream':

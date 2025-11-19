@@ -24,7 +24,6 @@ class ViewSessionScreen extends StatefulWidget {
 }
 
 class _ViewSessionScreenState extends State<ViewSessionScreen> {
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -45,15 +44,9 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
 
-          // Show Media if Available (Even if Active)
           if (mediaUrl != null && mediaUrl.isNotEmpty) {
             if (widget.serviceType.contains('camera')) {
-              return Center(child: Image.network(mediaUrl,
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return const CircularProgressIndicator();
-                },
-              ));
+              return Center(child: Image.network(mediaUrl));
             }
             if (widget.serviceType.contains('video')) {
               return _VideoPlayerWidget(videoUrl: mediaUrl);
@@ -64,22 +57,14 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           }
 
           if (status == 'completed') {
-            return const Center(
-              child: Text(
-                'Session has ended.',
-                style: TextStyle(fontSize: 18, color: Colors.grey),
-              ),
-            );
+            return const Center(child: Text('Session has ended.', style: TextStyle(fontSize: 18, color: Colors.grey)));
           }
-
           if (status == 'accepted') {
             return _buildViewer(widget.serviceType);
           }
-
           if (status == 'denied') {
             return const Center(child: Text('Request was denied.'));
           }
-
           return const Center(child: Text('Waiting for request to be accepted...'));
         },
       ),
@@ -88,28 +73,20 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
 
   Widget _buildViewer(String serviceType) {
     switch (serviceType) {
-      case 'location':
-        return _LocationViewer(requestId: widget.requestId);
-
+      case 'location': return _LocationViewer(requestId: widget.requestId);
       case 'front_stream':
-      case 'back_stream':
-        return _VideoStreamViewer(requestId: widget.requestId);
-
+      case 'back_stream': return _VideoStreamViewer(requestId: widget.requestId);
       case 'front_camera':
-      case 'back_camera':
-        return const Center(child: Text('Waiting for sender to take photo...'));
+      case 'back_camera': return const Center(child: Text('Waiting for sender to take photo...'));
       case 'front_video':
-      case 'back_video':
-        return const Center(child: Text('Waiting for sender to record video...'));
-      case 'audio':
-        return const Center(child: Text('Waiting for sender to record audio...'));
-
-      default:
-        return Text('Viewer for ${serviceType}');
+      case 'back_video': return const Center(child: Text('Waiting for sender to record video...'));
+      case 'audio': return const Center(child: Text('Waiting for sender to record audio...'));
+      default: return Text('Viewer for ${serviceType}');
     }
   }
 }
 
+// --- FIX 5: Mute Button & Debug Logic ---
 class _VideoStreamViewer extends StatefulWidget {
   final String requestId;
   const _VideoStreamViewer({required this.requestId});
@@ -127,6 +104,7 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
 
   String _status = "Initializing...";
   bool _hasStream = false;
+  bool _isMuted = false;
 
   final Map<String, dynamic> _iceConfig = {
     'iceServers': [
@@ -143,22 +121,13 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   }
 
   Future<void> _initialize() async {
-    setState(() => _status = "Initializing Renderer...");
     await _remoteRenderer.initialize();
-
-    setState(() => _status = "Creating PeerConnection...");
     _peerConnection = await createPeerConnection(_iceConfig);
 
-    if (mounted) {
-      setState(() => _status = "Waiting for Sender to join...");
-    }
+    if (mounted) setState(() => _status = "Waiting for Sender to join...");
 
     _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
       if (mounted) setState(() => _status = "ICE State: ${state.toString().split('.').last}");
-    };
-
-    _peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
-      if (mounted) setState(() => _status = "Connection: ${state.toString().split('.').last}");
     };
 
     _peerConnection?.onTrack = (RTCTrackEvent event) {
@@ -202,6 +171,19 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
     });
   }
 
+  void _toggleMute() {
+    if (_remoteRenderer.srcObject != null) {
+      final audioTracks = _remoteRenderer.srcObject!.getAudioTracks();
+      if (audioTracks.isNotEmpty) {
+        bool newState = !_isMuted;
+        audioTracks[0].enabled = !newState;
+        setState(() {
+          _isMuted = newState;
+        });
+      }
+    }
+  }
+
   @override
   void dispose() {
     _sessionSub?.cancel();
@@ -224,6 +206,22 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
                 objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
               ),
             ),
+
+          // Mute Button Overlay
+          if (_hasStream)
+            Positioned(
+              bottom: 30,
+              right: 30,
+              child: FloatingActionButton(
+                onPressed: _toggleMute,
+                backgroundColor: _isMuted ? Colors.red : Colors.white,
+                child: Icon(
+                  _isMuted ? Icons.volume_off : Icons.volume_up,
+                  color: _isMuted ? Colors.white : Colors.black,
+                ),
+              ),
+            ),
+
           Center(
             child: _hasStream
                 ? null

@@ -41,7 +41,6 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          // --- Chat History ---
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: _ticketService.getChatHistoryStream(widget.peerUserId),
@@ -73,8 +72,6 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             ),
           ),
-
-          // --- Request Bar ---
           Container(
             padding: const EdgeInsets.all(12.0),
             decoration: BoxDecoration(
@@ -115,7 +112,6 @@ class _ChatScreenState extends State<ChatScreen> {
     var status = data['status'];
     String? mediaUrl = data['mediaUrl'];
 
-    // --- NEW LOGIC: Handle Start/End Time ---
     DateTime? startTime;
     DateTime? endTime;
 
@@ -125,20 +121,16 @@ class _ChatScreenState extends State<ChatScreen> {
     if (data['endTime'] != null) {
       endTime = (data['endTime'] as Timestamp).toDate();
     }
-    // ----------------------------------------
 
-    // Get service icon
     IconData icon = Icons.help;
     if (service == 'location') icon = Icons.location_on;
     if (service.contains('video') || service.contains('stream')) icon = Icons.videocam;
     if (service.contains('audio')) icon = Icons.mic;
     if (service.contains('camera') || service == 'image_sample') icon = Icons.camera_alt;
 
-    // Set colors
     final bubbleColor = isMe ? Theme.of(context).primaryColor : Colors.grey[200];
     final textColor = isMe ? Colors.white : Colors.black87;
 
-    // Set status icon and color
     IconData statusIcon = Icons.pending_outlined;
     Color statusColor = isMe ? Colors.white70 : Colors.orange.shade700;
     if (status == 'accepted') {
@@ -156,7 +148,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
     String title = isMe ? 'You requested $service' : '${data['requesterName']} requested $service';
 
-    // Format Time Display
     String timeInfo = "Processing...";
     if (startTime != null && endTime != null) {
       String dateStr = DateFormat('MMM d').format(startTime);
@@ -193,7 +184,6 @@ class _ChatScreenState extends State<ChatScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: textColor, fontSize: 16)),
-                    // --- NEW DISPLAY TEXT ---
                     Text(timeInfo, style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 12)),
                   ],
                 ),
@@ -214,7 +204,6 @@ class _ChatScreenState extends State<ChatScreen> {
             ],
           ),
 
-          // --- VIEW BUTTON LOGIC FOR USER A ---
           if ((status == 'accepted' || status == 'completed') && isMe)
             Padding(
               padding: const EdgeInsets.only(top: 10.0),
@@ -222,10 +211,29 @@ class _ChatScreenState extends State<ChatScreen> {
                 icon: const Icon(Icons.remove_red_eye_outlined, size: 18),
                 label: const Text('View Live / File'),
                 onPressed: () {
-                  // 1. Check Logic
                   final now = DateTime.now();
 
-                  // If completed or has media, allow view (Active Session Behavior)
+                  // --- FIX 3 & 4: Block access after end time ---
+                  if (endTime != null && now.isAfter(endTime)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("This service has ended. File is no longer accessible."),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                    return;
+                  }
+
+                  if (startTime != null && now.isBefore(startTime)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text("This service will start at ${DateFormat('h:mm a').format(startTime)}"),
+                        backgroundColor: Colors.orange,
+                      ),
+                    );
+                    return;
+                  }
+
                   if (status == 'completed' || (mediaUrl != null && mediaUrl.isNotEmpty)) {
                     Navigator.push(
                       context,
@@ -239,31 +247,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     return;
                   }
 
-                  if (startTime != null && endTime != null) {
-                    // 2. Too Early
-                    if (now.isBefore(startTime)) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text("This service will start at ${DateFormat('h:mm a').format(startTime)}"),
-                          backgroundColor: Colors.orange,
-                        ),
-                      );
-                      return; // Block access
-                    }
-
-                    // 3. Too Late
-                    if (now.isAfter(endTime)) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text("This service has ended."),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                      return; // Block access
-                    }
-                  }
-
-                  // 4. On Time - Allow Access
                   Navigator.push(
                     context,
                     MaterialPageRoute(
