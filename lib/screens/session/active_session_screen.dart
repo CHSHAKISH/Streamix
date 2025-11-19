@@ -67,15 +67,30 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   @override
   void initState() {
     super.initState();
+
+    // FIX 5: Initialize Video Renderer Asynchronously
     if (widget.serviceType.contains('stream')) {
-      _localRenderer.initialize();
+      _initRenderers();
     }
+
+    // Initialize Audio Recorder
     if (widget.serviceType == 'audio') {
       _initAudioRecorder();
     }
   }
 
+  // --- NEW FUNCTION FOR VIDEO INITIALIZATION ---
+  Future<void> _initRenderers() async {
+    await _localRenderer.initialize();
+    // Refresh UI to show the view once initialized
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  // --- NEW FUNCTION FOR AUDIO INITIALIZATION ---
   Future<void> _initAudioRecorder() async {
+    // Initialize the audio session
     await _audioRecorder.openRecorder();
   }
 
@@ -120,7 +135,14 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   // --- Location Sharing ---
   Future<void> _startLocationSharing() async {
     var status = await Permission.location.request();
-    if (status.isDenied) { /*... snackbar ...*/ return; }
+    if (status.isDenied) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location permission is required.')),
+        );
+      }
+      return;
+    }
 
     await _location.changeSettings(accuracy: LocationAccuracy.high);
     _locationSubscription =
@@ -378,8 +400,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     setState(() { _isStreaming = false; });
     if (mounted) Navigator.pop(context);
   }
-  // --- END FULL ---
-
 
   // --- Main Build Function ---
   Widget _buildTaskWidget() {

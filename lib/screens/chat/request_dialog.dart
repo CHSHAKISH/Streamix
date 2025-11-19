@@ -15,6 +15,7 @@ class _RequestDialogState extends State<RequestDialog> {
   final TicketService _ticketService = TicketService();
 
   String _selectedService = 'location';
+  // Default to 5 minutes from now (safe default)
   DateTime _startTime = DateTime.now().add(const Duration(minutes: 5));
   DateTime _endTime = DateTime.now().add(const Duration(minutes: 10));
   bool _isLoading = false;
@@ -71,6 +72,23 @@ class _RequestDialogState extends State<RequestDialog> {
   }
 
   void _sendRequest() async {
+    // --- VALIDATION START: 2-Minute Rule ---
+    final DateTime now = DateTime.now();
+    // Calculate the minimum allowed time (2 minutes from now)
+    final DateTime minAllowedTime = now.add(const Duration(minutes: 2));
+
+    // If start time is BEFORE the minimum allowed time, show error and stop.
+    if (_startTime.isBefore(minAllowedTime)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Request must be scheduled at least 2 minutes in the future.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    // --- VALIDATION END ---
+
     setState(() { _isLoading = true; });
 
     String result = await _ticketService.createScheduledRequest(

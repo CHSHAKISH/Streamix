@@ -123,7 +123,7 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
   }
 }
 
-// --- NEW WIDGET FOR LIVE VIDEO ---
+// --- UPDATED DEBUGGING WIDGET FOR LIVE VIDEO ---
 class _VideoStreamViewer extends StatefulWidget {
   final String requestId;
   const _VideoStreamViewer({required this.requestId});
@@ -138,6 +138,10 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
   StreamSubscription? _sessionSub;
   StreamSubscription? _candidateSub;
+
+  // Debugging State
+  String _status = "Initializing...";
+  bool _hasStream = false;
 
   final Map<String, dynamic> _iceConfig = {
     'iceServers': [
@@ -154,54 +158,79 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   }
 
   Future<void> _initialize() async {
+    setState(() => _status = "Initializing Renderer...");
     await _remoteRenderer.initialize();
+
+    setState(() => _status = "Creating PeerConnection...");
     _peerConnection = await createPeerConnection(_iceConfig);
 
+    // --- THIS IS THE NEW DEBUG LINE ---
+    if (mounted) {
+      setState(() => _status = "Waiting for Sender to join...");
+    }
+
+    // 1. Monitor Connection State
     _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
       print('REQUESTER: ICE Connection State: $state');
-    };
-
-    // Listen for the remote video track
-    _peerConnection?.onTrack = (RTCTrackEvent event) {
-      if (event.streams.isNotEmpty) {
-        print("--- REQUESTER: GOT REMOTE STREAM ---");
-        setState(() {
-          _remoteRenderer.srcObject = event.streams[0];
-        });
+      if (mounted) {
+        setState(() => _status = "ICE State: ${state.toString().split('.').last}");
       }
     };
 
-    // Send our candidates to the Sender
-    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      _signalingService.addCandidate(widget.requestId, candidate, true); // true = isRequester
+    _peerConnection?.onConnectionState = (RTCPeerConnectionState state) {
+      print('REQUESTER: Connection State: $state');
+      if (mounted) {
+        setState(() => _status = "Connection: ${state.toString().split('.').last}");
+      }
     };
 
-    // Listen for the Sender's offer
-    _sessionSub =
-        _signalingService.getSessionStream(widget.requestId).listen((doc) async {
-          if (doc.exists) {
-            var data = doc.data() as Map<String, dynamic>;
+    // 2. Listen for Video Track
+    _peerConnection?.onTrack = (RTCTrackEvent event) {
+      print("--- REQUESTER: ON TRACK EVENT FIRED ---");
+      if (event.streams.isNotEmpty) {
+        print("--- REQUESTER: GOT STREAM ---");
+        if (mounted) {
+          setState(() {
+            _remoteRenderer.srcObject = event.streams[0];
+            _hasStream = true;
+            _status = "Stream Received!";
+          });
+        }
+      }
+    };
 
-            if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
-              var offer = RTCSessionDescription(
-                data['offer']['sdp'],
-                data['offer']['type'],
-              );
+    // 3. ICE Candidates
+    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
+      _signalingService.addCandidate(widget.requestId, candidate, true);
+    };
 
-              await _peerConnection?.setRemoteDescription(offer);
+    // 4. Signaling Listener
+    _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
+      if (doc.exists) {
+        var data = doc.data() as Map<String, dynamic>;
 
-              // Create and send an answer
-              RTCSessionDescription answer = await _peerConnection!.createAnswer();
-              await _peerConnection!.setLocalDescription(answer);
-              await _signalingService.createAnswer(widget.requestId, answer);
-            }
-          }
-        });
+        if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
+          print("--- REQUESTER: RECEIVED OFFER ---");
+          if (mounted) setState(() => _status = "Received Offer...");
 
-    // Listen for the Sender's candidates
-    _candidateSub = _signalingService
-        .getCandidateStream(widget.requestId, true)
-        .listen((snapshot) {
+          var offer = RTCSessionDescription(
+            data['offer']['sdp'],
+            data['offer']['type'],
+          );
+
+          await _peerConnection?.setRemoteDescription(offer);
+
+          var answer = await _peerConnection!.createAnswer();
+          print("--- REQUESTER: CREATED ANSWER ---");
+
+          await _peerConnection!.setLocalDescription(answer);
+          await _signalingService.createAnswer(widget.requestId, answer);
+          if (mounted) setState(() => _status = "Sent Answer. Connecting...");
+        }
+      }
+    });
+
+    _candidateSub = _signalingService.getCandidateStream(widget.requestId, true).listen((snapshot) {
       for (var change in snapshot.docChanges) {
         if (change.type == DocumentChangeType.added) {
           var data = change.doc.data() as Map<String, dynamic>;
@@ -227,15 +256,48 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
-        color: Colors.black,
-        border: Border.all(color: Colors.grey),
+      color: Colors.black,
+      child: Stack(
+        children: [
+          // The Video View
+          if (_hasStream)
+            Positioned.fill(
+              child: RTCVideoView(
+                _remoteRenderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              ),
+            ),
+
+          // The Debug Status Overlay
+          Center(
+            child: _hasStream
+                ? null // Hide text if stream is active
+                : Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(color: Colors.white),
+                  const SizedBox(height: 16),
+                  Text(
+                    _status,
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
-      child: RTCVideoView(_remoteRenderer),
     );
   }
 }
-// --- END NEW WIDGET ---
+// --- END UPDATED WIDGET ---
 
 
 // --- AUDIO PLAYER WIDGET ---
