@@ -24,6 +24,7 @@ class ViewSessionScreen extends StatefulWidget {
 }
 
 class _ViewSessionScreenState extends State<ViewSessionScreen> {
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -44,6 +45,7 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
 
+          // Show Media if Available
           if (mediaUrl != null && mediaUrl.isNotEmpty) {
             if (widget.serviceType.contains('camera')) {
               return Center(child: Image.network(mediaUrl));
@@ -57,14 +59,22 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           }
 
           if (status == 'completed') {
-            return const Center(child: Text('Session has ended.', style: TextStyle(fontSize: 18, color: Colors.grey)));
+            return const Center(
+              child: Text(
+                'Session has ended.',
+                style: TextStyle(fontSize: 18, color: Colors.grey),
+              ),
+            );
           }
+
           if (status == 'accepted') {
             return _buildViewer(widget.serviceType);
           }
+
           if (status == 'denied') {
             return const Center(child: Text('Request was denied.'));
           }
+
           return const Center(child: Text('Waiting for request to be accepted...'));
         },
       ),
@@ -73,20 +83,29 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
 
   Widget _buildViewer(String serviceType) {
     switch (serviceType) {
-      case 'location': return _LocationViewer(requestId: widget.requestId);
+      case 'location':
+        return _LocationViewer(requestId: widget.requestId);
+
       case 'front_stream':
-      case 'back_stream': return _VideoStreamViewer(requestId: widget.requestId);
+      case 'back_stream':
+        return _VideoStreamViewer(requestId: widget.requestId);
+
       case 'front_camera':
-      case 'back_camera': return const Center(child: Text('Waiting for sender to take photo...'));
+      case 'back_camera':
+        return const Center(child: Text('Waiting for sender to take photo...'));
       case 'front_video':
-      case 'back_video': return const Center(child: Text('Waiting for sender to record video...'));
-      case 'audio': return const Center(child: Text('Waiting for sender to record audio...'));
-      default: return Text('Viewer for ${serviceType}');
+      case 'back_video':
+        return const Center(child: Text('Waiting for sender to record video...'));
+      case 'audio':
+        return const Center(child: Text('Waiting for sender to record audio...'));
+
+      default:
+        return Text('Viewer for ${serviceType}');
     }
   }
 }
 
-// --- FIX 5: Mute Button & Debug Logic ---
+// --- VIDEO STREAM VIEWER (With Candidate Queueing & Mute) ---
 class _VideoStreamViewer extends StatefulWidget {
   final String requestId;
   const _VideoStreamViewer({required this.requestId});
@@ -106,10 +125,17 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   bool _hasStream = false;
   bool _isMuted = false;
 
+  // --- FIX: QUEUE CANDIDATES UNTIL OFFER IS SET ---
+  List<RTCIceCandidate> _candidateQueue = [];
+  bool _isRemoteDescriptionSet = false;
+
   final Map<String, dynamic> _iceConfig = {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
+      {'urls': 'stun:stun2.l.google.com:19302'},
+      {'urls': 'stun:stun3.l.google.com:19302'},
+      {'urls': 'stun:stun4.l.google.com:19302'},
     ],
     'sdpSemantics': 'unified-plan',
   };
@@ -146,26 +172,56 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
       _signalingService.addCandidate(widget.requestId, candidate, true);
     };
 
+    // --- 1. Listen for Offer ---
     _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
       if (doc.exists) {
         var data = doc.data() as Map<String, dynamic>;
+
+        // Check if Offer exists and we haven't processed it yet
         if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
           if (mounted) setState(() => _status = "Received Offer...");
-          var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
-          await _peerConnection?.setRemoteDescription(offer);
-          var answer = await _peerConnection!.createAnswer();
-          await _peerConnection?.setLocalDescription(answer);
-          await _signalingService.createAnswer(widget.requestId, answer);
-          if (mounted) setState(() => _status = "Sent Answer. Connecting...");
+
+          try {
+            var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
+            await _peerConnection?.setRemoteDescription(offer);
+
+            // --- FIX: FLUSH QUEUE ---
+            _isRemoteDescriptionSet = true;
+            for (var candidate in _candidateQueue) {
+              await _peerConnection?.addCandidate(candidate);
+            }
+            _candidateQueue.clear();
+            // ------------------------
+
+            var answer = await _peerConnection!.createAnswer();
+            await _peerConnection?.setLocalDescription(answer);
+            await _signalingService.createAnswer(widget.requestId, answer);
+
+            if (mounted) setState(() => _status = "Sent Answer. Connecting...");
+          } catch (e) {
+            if (mounted) setState(() => _status = "Error: $e");
+          }
         }
       }
     });
 
-    _candidateSub = _signalingService.getCandidateStream(widget.requestId, true).listen((snapshot) {
+    // --- 2. Listen for Candidates ---
+    _candidateSub = _signalingService.getCandidateStream(widget.requestId, true).listen((snapshot) async {
       for (var change in snapshot.docChanges) {
         if (change.type == DocumentChangeType.added) {
           var data = change.doc.data() as Map<String, dynamic>;
-          _peerConnection?.addCandidate(RTCIceCandidate(data['candidate'], data['sdpMid'], data['sdpMLineIndex']));
+          var candidate = RTCIceCandidate(
+              data['candidate'],
+              data['sdpMid'],
+              data['sdpMLineIndex']
+          );
+
+          // --- FIX: CHECK IF READY BEFORE ADDING ---
+          if (_isRemoteDescriptionSet && _peerConnection != null) {
+            await _peerConnection?.addCandidate(candidate);
+          } else {
+            _candidateQueue.add(candidate);
+          }
         }
       }
     });
@@ -207,21 +263,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
               ),
             ),
 
-          // Mute Button Overlay
-          if (_hasStream)
-            Positioned(
-              bottom: 30,
-              right: 30,
-              child: FloatingActionButton(
-                onPressed: _toggleMute,
-                backgroundColor: _isMuted ? Colors.red : Colors.white,
-                child: Icon(
-                  _isMuted ? Icons.volume_off : Icons.volume_up,
-                  color: _isMuted ? Colors.white : Colors.black,
-                ),
-              ),
-            ),
-
           Center(
             child: _hasStream
                 ? null
@@ -245,12 +286,28 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
               ),
             ),
           ),
+
+          // Mute Button
+          if (_hasStream)
+            Positioned(
+              bottom: 30,
+              right: 30,
+              child: FloatingActionButton(
+                onPressed: _toggleMute,
+                backgroundColor: _isMuted ? Colors.red : Colors.white,
+                child: Icon(
+                  _isMuted ? Icons.volume_off : Icons.volume_up,
+                  color: _isMuted ? Colors.white : Colors.black,
+                ),
+              ),
+            ),
         ],
       ),
     );
   }
 }
 
+// (Keep AudioPlayerWidget, VideoPlayerWidget, LocationViewer as they were - No changes needed there)
 class _AudioPlayerWidget extends StatefulWidget {
   final String audioUrl;
   const _AudioPlayerWidget({required this.audioUrl});
@@ -262,53 +319,18 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   bool _isPlayerReady = false;
   bool _isPlaying = false;
   @override
-  void initState() {
-    super.initState();
-    _initAudioPlayer();
-  }
-  Future<void> _initAudioPlayer() async {
-    await _audioPlayer.openPlayer();
-    setState(() { _isPlayerReady = true; });
-  }
+  void initState() { super.initState(); _initAudioPlayer(); }
+  Future<void> _initAudioPlayer() async { await _audioPlayer.openPlayer(); setState(() { _isPlayerReady = true; }); }
   @override
-  void dispose() {
-    _audioPlayer.closePlayer();
-    super.dispose();
-  }
+  void dispose() { _audioPlayer.closePlayer(); super.dispose(); }
   Future<void> _togglePlayer() async {
     if (!_isPlayerReady) return;
-    if (_isPlaying) {
-      await _audioPlayer.stopPlayer();
-      setState(() { _isPlaying = false; });
-    } else {
-      await _audioPlayer.startPlayer(
-        fromURI: widget.audioUrl,
-        codec: Codec.aacADTS,
-        whenFinished: () { setState(() { _isPlaying = false; }); },
-      );
-      setState(() { _isPlaying = true; });
-    }
+    if (_isPlaying) { await _audioPlayer.stopPlayer(); setState(() { _isPlaying = false; }); }
+    else { await _audioPlayer.startPlayer(fromURI: widget.audioUrl, codec: Codec.aacADTS, whenFinished: () { setState(() { _isPlaying = false; }); }); setState(() { _isPlaying = true; }); }
   }
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          IconButton.filled(
-            icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
-            iconSize: 60,
-            onPressed: _isPlayerReady ? _togglePlayer : null,
-            style: IconButton.styleFrom(
-              backgroundColor: Theme.of(context).primaryColor,
-              foregroundColor: Colors.white,
-            ),
-          ),
-          const SizedBox(height: 20),
-          Text(_isPlaying ? 'Playing...' : 'Tap to play audio', style: const TextStyle(fontSize: 16)),
-        ],
-      ),
-    );
+    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [IconButton.filled(icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow), iconSize: 60, onPressed: _isPlayerReady ? _togglePlayer : null, style: IconButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white)), const SizedBox(height: 20), Text(_isPlaying ? 'Playing...' : 'Tap to play audio', style: const TextStyle(fontSize: 16))]));
   }
 }
 
@@ -322,49 +344,15 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
   late Future<void> _initializeVideoPlayerFuture;
   @override
-  void initState() {
-    super.initState();
-    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
-    _initializeVideoPlayerFuture = _controller.initialize();
-    _controller.setLooping(true);
-  }
+  void initState() { super.initState(); _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl)); _initializeVideoPlayerFuture = _controller.initialize(); _controller.setLooping(true); }
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  void dispose() { _controller.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder(
-      future: _initializeVideoPlayerFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.done) {
-          return Center(
-            child: AspectRatio(
-              aspectRatio: _controller.value.aspectRatio,
-              child: Stack(
-                alignment: Alignment.bottomCenter,
-                children: [
-                  VideoPlayer(_controller),
-                  IconButton(
-                    iconSize: 60,
-                    color: Colors.white.withOpacity(0.8),
-                    icon: Icon(_controller.value.isPlaying ? Icons.pause : Icons.play_arrow),
-                    onPressed: () {
-                      setState(() {
-                        _controller.value.isPlaying ? _controller.pause() : _controller.play();
-                      });
-                    },
-                  ),
-                ],
-              ),
-            ),
-          );
-        } else {
-          return const Center(child: CircularProgressIndicator());
-        }
-      },
-    );
+    return FutureBuilder(future: _initializeVideoPlayerFuture, builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.done) { return Center(child: AspectRatio(aspectRatio: _controller.value.aspectRatio, child: Stack(alignment: Alignment.bottomCenter, children: [VideoPlayer(_controller), IconButton(iconSize: 60, color: Colors.white.withOpacity(0.8), icon: Icon(_controller.value.isPlaying ? Icons.pause : Icons.play_arrow), onPressed: () { setState(() { _controller.value.isPlaying ? _controller.pause() : _controller.play(); }); })]))); }
+      else { return const Center(child: CircularProgressIndicator()); }
+    });
   }
 }
 
@@ -392,34 +380,11 @@ class _LocationViewerState extends State<_LocationViewer> {
         }
         return FlutterMap(
           mapController: _mapController,
-          options: MapOptions(
-            initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629),
-            initialZoom: _senderPosition == null ? 4.0 : 16.0,
-          ),
+          options: MapOptions(initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629), initialZoom: _senderPosition == null ? 4.0 : 16.0),
           children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.streamix',
-            ),
-            if (_senderPosition != null)
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: _senderPosition!,
-                    width: 80,
-                    height: 80,
-                    child: Icon(Icons.location_on, color: Theme.of(context).primaryColor, size: 40),
-                  ),
-                ],
-              ),
-            if (_senderPosition == null)
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), borderRadius: BorderRadius.circular(8)),
-                  child: const Text('Waiting for sender to start sharing...', style: TextStyle(color: Colors.white, fontSize: 16)),
-                ),
-              ),
+            TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.streamix'),
+            if (_senderPosition != null) MarkerLayer(markers: [Marker(point: _senderPosition!, width: 80, height: 80, child: Icon(Icons.location_on, color: Theme.of(context).primaryColor, size: 40))]),
+            if (_senderPosition == null) Center(child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), borderRadius: BorderRadius.circular(8)), child: const Text('Waiting for sender to start sharing...', style: TextStyle(color: Colors.white, fontSize: 16)))),
           ],
         );
       },

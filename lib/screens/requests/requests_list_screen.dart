@@ -60,242 +60,177 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
       for (String id in _selectedIds) {
         await _ticketService.deleteRequest(id);
       }
-      setState(() {
-        _selectedIds.clear();
-        _isSelectionMode = false;
-      });
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Requests deleted.")));
+      setState(() { _selectedIds.clear(); _isSelectionMode = false; });
     }
+  }
+
+  void _enterSession(String requestId, String service, DateTime startTime, DateTime endTime) {
+    // Calculate how long the session should run
+    // If we are starting late (e.g. 1 min after start time), we reduce the duration.
+    final now = DateTime.now();
+
+    // Default duration is total time between start and end
+    int duration = endTime.difference(startTime).inSeconds;
+
+    // If starting late, adjust duration so it still stops at endTime
+    if (now.isAfter(startTime)) {
+      duration = endTime.difference(now).inSeconds;
+    }
+
+    if (duration <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("This session has already expired."), backgroundColor: Colors.red));
+      return;
+    }
+
+    Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ActiveSessionScreen(
+              requestId: requestId,
+              serviceType: service,
+              durationInSeconds: duration,
+              scheduledStartTime: startTime, // Pass start time for auto-wait logic
+            )
+        )
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    return Scaffold(
+      appBar: AppBar(
+        leading: _isSelectionMode ? IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() { _isSelectionMode = false; _selectedIds.clear(); })) : null,
+        title: Text(_isSelectionMode ? '${_selectedIds.length} Selected' : 'My Requests'),
+        actions: [
+          if (_isSelectionMode) ...[
+            IconButton(icon: const Icon(Icons.select_all), onPressed: () {}),
+            IconButton(icon: const Icon(Icons.delete), onPressed: _deleteSelected),
+          ]
+        ],
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance.collection('requests').where('peerUserId', isEqualTo: _currentUserId).snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          var requests = snapshot.data!.docs;
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('requests')
-          .where('peerUserId', isEqualTo: _currentUserId)
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return Scaffold(appBar: AppBar(title: const Text('My Requests')), body: const Center(child: CircularProgressIndicator()));
-        }
+          // Sort Newest First
+          requests.sort((a, b) {
+            Timestamp t1 = (a.data() as Map)['startTime'] ?? Timestamp.now();
+            Timestamp t2 = (b.data() as Map)['startTime'] ?? Timestamp.now();
+            return t2.compareTo(t1);
+          });
 
-        var requests = snapshot.data?.docs ?? [];
+          if (requests.isEmpty) return const Center(child: Text("No requests yet."));
 
-        // Sort Newest First (Descending)
-        requests.sort((a, b) {
-          Timestamp timeA = (a.data() as Map<String, dynamic>)['startTime'] ?? Timestamp.now();
-          Timestamp timeB = (b.data() as Map<String, dynamic>)['startTime'] ?? Timestamp.now();
-          return timeB.compareTo(timeA);
-        });
+          return ListView.builder(
+              padding: const EdgeInsets.only(top: 10, bottom: 80),
+              itemCount: requests.length,
+              itemBuilder: (context, index) {
+                var data = requests[index].data() as Map<String, dynamic>;
+                String requestId = requests[index].id;
+                String status = data['status'];
+                String service = data['serviceType'];
+                String requester = data['requesterName'];
 
-        return Scaffold(
-          // Remove hardcoded background color to allow Theme to take over
-          appBar: AppBar(
-            leading: _isSelectionMode
-                ? IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() { _isSelectionMode = false; _selectedIds.clear(); }))
-                : null,
-            title: Text(_isSelectionMode ? '${_selectedIds.length} Selected' : 'My Requests'),
-            actions: [
-              if (_isSelectionMode) ...[
-                IconButton(
-                  icon: Icon(_selectedIds.length == requests.length ? Icons.deselect : Icons.select_all),
-                  onPressed: () => _selectAll(requests),
-                ),
-                IconButton(icon: const Icon(Icons.delete), onPressed: _deleteSelected),
-              ]
-            ],
-          ),
-          body: requests.isEmpty
-              ? const Center(child: Text('You have no requests.', style: TextStyle(fontSize: 16)))
-              : ListView.builder(
-            padding: const EdgeInsets.only(top: 10, bottom: 80),
-            itemCount: requests.length,
-            itemBuilder: (context, index) {
-              var data = requests[index].data() as Map<String, dynamic>;
-              String requestId = requests[index].id;
-              String service = data['serviceType'];
-              String requester = data['requesterName'];
-              String status = data['status'];
+                DateTime startTime = (data['startTime'] as Timestamp).toDate();
+                DateTime endTime = (data['endTime'] as Timestamp).toDate();
+                final now = DateTime.now();
 
-              DateTime startTime = (data['startTime'] as Timestamp).toDate();
-              DateTime endTime = (data['endTime'] as Timestamp).toDate();
-              final now = DateTime.now();
+                bool isExpired = now.isAfter(endTime);
+                bool isDone = status == 'completed' || isExpired;
+                bool isSelected = _selectedIds.contains(requestId);
 
-              bool isExpired = now.isAfter(endTime);
-              bool isDone = status == 'completed' || isExpired;
-              bool isSelected = _selectedIds.contains(requestId);
+                // Status Logic
+                String statusText = status.toUpperCase();
+                Color statusColor = Colors.orange;
+                if (isExpired) { statusText = "DONE"; statusColor = Colors.grey; }
+                else if (status == 'accepted') { statusColor = Colors.green; }
+                else if (status == 'denied') { statusColor = Colors.red; }
 
-              // Colors and Text
-              Color statusColor;
-              String statusText;
-
-              if (isDone) {
-                statusColor = Colors.grey;
-                statusText = "DONE";
-              } else if (status == 'accepted') {
-                statusColor = Colors.green;
-                statusText = "ACCEPTED";
-              } else if (status == 'denied') {
-                statusColor = Colors.red;
-                statusText = "DENIED";
-              } else {
-                statusColor = Colors.orange;
-                statusText = "PENDING";
-              }
-
-              // Dynamic Card Color for Dark/Light mode
-              Color cardColor;
-              if (isSelected) {
-                cardColor = Theme.of(context).primaryColor.withOpacity(isDarkMode ? 0.3 : 0.1);
-              } else if (status == 'accepted') {
-                // Subtle green tint
-                cardColor = isDarkMode ? Colors.green.withOpacity(0.15) : Colors.green.shade50;
-              } else {
-                cardColor = Theme.of(context).cardColor;
-              }
-
-              String dateStr = DateFormat('MMM d').format(startTime);
-              String timeRange = "${DateFormat('h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}";
-              int durationInSeconds = endTime.difference(startTime).inSeconds;
-
-              return InkWell(
-                onLongPress: () {
-                  setState(() {
-                    _isSelectionMode = true;
-                    _toggleSelection(requestId);
-                  });
-                },
-                onTap: () {
-                  if (_isSelectionMode) _toggleSelection(requestId);
-                },
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                      color: cardColor,
-                      borderRadius: BorderRadius.circular(12),
-                      border: isSelected ? Border.all(color: Theme.of(context).primaryColor, width: 2) : null,
-                      boxShadow: [
-                        if (!isSelected && !isDarkMode) // Only show shadow in light mode
-                          BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 4))
-                      ]
-                  ),
-                  child: IntrinsicHeight(
-                    child: Row(
-                      children: [
-                        // Status Strip
-                        Container(
-                          width: 6,
-                          decoration: BoxDecoration(
-                            color: statusColor,
-                            borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), bottomLeft: Radius.circular(12)),
+                return InkWell(
+                  onLongPress: () { setState(() { _isSelectionMode = true; _toggleSelection(requestId); }); },
+                  onTap: () { if (_isSelectionMode) _toggleSelection(requestId); },
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                        color: isSelected ? Theme.of(context).primaryColor.withOpacity(0.1) : Theme.of(context).cardColor,
+                        borderRadius: BorderRadius.circular(12),
+                        border: isSelected ? Border.all(color: Theme.of(context).primaryColor, width: 2) : null,
+                        boxShadow: [ BoxShadow(color: Colors.black12, blurRadius: 4, offset: const Offset(0, 2)) ]
+                    ),
+                    child: IntrinsicHeight(
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 6,
+                            decoration: BoxDecoration(color: statusColor, borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), bottomLeft: Radius.circular(12))),
                           ),
-                        ),
-                        // Content
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.all(16.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Text(requester, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: statusColor.withOpacity(0.2), // softer background
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                          statusText,
-                                          style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)
-                                      ),
-                                    )
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                    service.replaceAll('_', ' ').toUpperCase(),
-                                    style: TextStyle(fontSize: 13, color: isDarkMode ? Colors.grey[400] : Colors.black54, letterSpacing: 0.5)
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Icon(Icons.calendar_today, size: 14, color: isDarkMode ? Colors.grey[400] : Colors.grey),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                        "$dateStr  •  $timeRange",
-                                        style: TextStyle(fontSize: 14, color: isDarkMode ? Colors.white70 : Colors.black87)
-                                    ),
-                                  ],
-                                ),
-
-                                // Action Buttons
-                                if (!_isSelectionMode && !isDone) ...[
-                                  const SizedBox(height: 16),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                     children: [
-                                      if (status == 'pending') ...[
-                                        OutlinedButton(
-                                          onPressed: () => _ticketService.updateRequestStatus(requestId, false),
-                                          style: OutlinedButton.styleFrom(
-                                              foregroundColor: Colors.red,
-                                              side: const BorderSide(color: Colors.red)
-                                          ),
-                                          child: const Text("Deny"),
-                                        ),
-                                        const SizedBox(width: 12),
-                                        ElevatedButton(
-                                          onPressed: () {
-                                            _ticketService.updateRequestStatus(requestId, true);
-                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Accepted!")));
-                                          },
-                                          style: ElevatedButton.styleFrom(
-                                              backgroundColor: Theme.of(context).primaryColor,
-                                              foregroundColor: Colors.white
-                                          ),
-                                          child: const Text("Accept"),
-                                        ),
-                                      ],
-                                      if (status == 'accepted')
-                                        ElevatedButton.icon(
-                                          icon: const Icon(Icons.play_arrow, size: 18),
-                                          label: const Text("Start Sharing"),
-                                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                                          onPressed: () {
-                                            final now = DateTime.now();
-                                            if (now.isBefore(startTime)) {
-                                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Starts at ${DateFormat('h:mm a').format(startTime)}"), backgroundColor: Colors.orange));
-                                              return;
-                                            }
-                                            if (now.isAfter(endTime)) {
-                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Expired"), backgroundColor: Colors.red));
-                                              return;
-                                            }
-                                            Navigator.push(context, MaterialPageRoute(builder: (context) => ActiveSessionScreen(requestId: requestId, serviceType: service, durationInSeconds: durationInSeconds)));
-                                          },
-                                        )
+                                      Text(requester, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(color: statusColor.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                                        child: Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                                      )
                                     ],
-                                  )
-                                ]
-                              ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(service.replaceAll('_', ' ').toUpperCase(), style: const TextStyle(fontSize: 13, color: Colors.grey)),
+                                  const SizedBox(height: 8),
+                                  Text("${DateFormat('MMM d, h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}", style: const TextStyle(fontSize: 14)),
+
+                                  // Action Buttons
+                                  if (!_isSelectionMode && !isDone) ...[
+                                    const SizedBox(height: 16),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        if (status == 'pending') ...[
+                                          TextButton(onPressed: () => _ticketService.updateRequestStatus(requestId, false), child: const Text("Deny", style: TextStyle(color: Colors.red))),
+                                          const SizedBox(width: 8),
+                                          // ACCEPT & ENTER IMMEDIATELY
+                                          ElevatedButton(
+                                            onPressed: () {
+                                              _ticketService.updateRequestStatus(requestId, true);
+                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Request Accepted. Loading session...")));
+                                              _enterSession(requestId, service, startTime, endTime);
+                                            },
+                                            child: const Text("Accept"),
+                                          ),
+                                        ],
+                                        // OPEN SESSION (If already accepted but not started/finished)
+                                        if (status == 'accepted')
+                                          ElevatedButton.icon(
+                                            icon: const Icon(Icons.open_in_new, size: 16),
+                                            label: const Text("Open Session"),
+                                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                                            onPressed: () => _enterSession(requestId, service, startTime, endTime),
+                                          )
+                                      ],
+                                    )
+                                  ]
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              );
-            },
-          ),
-        );
-      },
+                );
+              }
+          );
+        },
+      ),
     );
   }
 }
