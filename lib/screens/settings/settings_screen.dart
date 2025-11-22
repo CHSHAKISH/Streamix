@@ -1,384 +1,210 @@
-import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:streamix/screens/settings/faqs_screen.dart'; // <-- 1. IMPORT
-import 'package:streamix/screens/settings/help_screen.dart'; // <-- 2. IMPORT
+import 'package:streamix/screens/settings/avatar_selector_screen.dart';
+import 'package:streamix/screens/settings/faqs_screen.dart';
+import 'package:streamix/screens/settings/help_screen.dart';
 import 'package:streamix/services/auth_service.dart';
 import 'package:streamix/services/theme_service.dart';
 
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
-  // --- Theme Dialog (same as before) ---
-  void _showThemeDialog(BuildContext context, ThemeService themeService) {
-    // ... (code is unchanged)
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  final User? _currentUser = FirebaseAuth.instance.currentUser;
+  final AuthService _authService = AuthService();
+
+  // --- 1. CHANGE CONTACT NUMBER DIALOG ---
+  void _showChangePhoneDialog() {
+    final controller = TextEditingController();
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Select Theme'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              RadioListTile<ThemeMode>(
-                title: const Text('System Default'),
-                value: ThemeMode.system,
-                groupValue: themeService.themeMode,
-                onChanged: (value) {
-                  if (value != null) themeService.setTheme(value);
-                  Navigator.pop(context);
-                },
-              ),
-              RadioListTile<ThemeMode>(
-                title: const Text('Light'),
-                value: ThemeMode.light,
-                groupValue: themeService.themeMode,
-                onChanged: (value) {
-                  if (value != null) themeService.setTheme(value);
-                  Navigator.pop(context);
-                },
-              ),
-              RadioListTile<ThemeMode>(
-                title: const Text('Dark'),
-                value: ThemeMode.dark,
-                groupValue: themeService.themeMode,
-                onChanged: (value) {
-                  if (value != null) themeService.setTheme(value);
-                  Navigator.pop(context);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  // --- Password Dialog (same as before) ---
-  void _showChangePasswordDialog(BuildContext context, AuthService authService) {
-    // ... (code is unchanged)
-    final formKey = GlobalKey<FormState>();
-    final currentPasswordController = TextEditingController();
-    final newPasswordController = TextEditingController();
-    final confirmPasswordController = TextEditingController();
-
-    bool obscureCurrent = true;
-    bool obscureNew = true;
-    bool obscureConfirm = true;
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return Dialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Form(
-                  key: formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Change Password',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).primaryColor,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      TextFormField(
-                        controller: currentPasswordController,
-                        obscureText: obscureCurrent,
-                        decoration: InputDecoration(
-                          labelText: 'Current Password',
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              obscureCurrent ? Icons.visibility_off : Icons.visibility,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                obscureCurrent = !obscureCurrent;
-                              });
-                            },
-                          ),
-                        ),
-                        validator: (val) =>
-                        val!.isEmpty ? 'Please enter your current password' : null,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: newPasswordController,
-                        obscureText: obscureNew,
-                        decoration: InputDecoration(
-                          labelText: 'New Password',
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              obscureNew ? Icons.visibility_off : Icons.visibility,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                obscureNew = !obscureNew;
-                              });
-                            },
-                          ),
-                        ),
-                        validator: (val) => val!.length < 6
-                            ? 'New password must be 6+ chars long'
-                            : null,
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: confirmPasswordController,
-                        obscureText: obscureConfirm,
-                        decoration: InputDecoration(
-                          labelText: 'Confirm New Password',
-                          prefixIcon: const Icon(Icons.lock_outline),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              obscureConfirm ? Icons.visibility_off : Icons.visibility,
-                            ),
-                            onPressed: () {
-                              setState(() {
-                                obscureConfirm = !obscureConfirm;
-                              });
-                            },
-                          ),
-                        ),
-                        validator: (val) {
-                          if (val!.isEmpty) return 'Please confirm your password';
-                          if (val != newPasswordController.text) {
-                            return 'Passwords do not match';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 24),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Cancel'),
-                          ),
-                          const SizedBox(width: 12),
-                          ElevatedButton(
-                            onPressed: () async {
-                              if (formKey.currentState!.validate()) {
-                                showDialog(
-                                  context: context,
-                                  barrierDismissible: false,
-                                  builder: (context) => const Center(
-                                    child: CircularProgressIndicator(),
-                                  ),
-                                );
-
-                                String result = await authService.changePassword(
-                                  currentPassword: currentPasswordController.text,
-                                  newPassword: newPasswordController.text,
-                                );
-
-                                Navigator.pop(context); // Close loading dialog
-                                Navigator.pop(context); // Close password dialog
-
-                                if (result == "Success") {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Password changed successfully!'),
-                                      backgroundColor: Colors.green,
-                                    ),
-                                  );
-                                } else {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(result),
-                                      backgroundColor: Colors.red,
-                                    ),
-                                  );
-                                }
-                              }
-                            },
-                            child: const Text('Change'),
-                          ),
-                        ],
-                      )
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  // --- Contact Dialog (same as before) ---
-  void _showChangeContactDialog(BuildContext context, AuthService authService) {
-    // ... (code is unchanged)
-    final formKey = GlobalKey<FormState>();
-    final mobileController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return Dialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Form(
-              key: formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Change Contact Number',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Theme.of(context).primaryColor,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  TextFormField(
-                    controller: mobileController,
-                    decoration: const InputDecoration(
-                      labelText: 'New Mobile Number',
-                      prefixIcon: Icon(Icons.phone_outlined),
-                    ),
-                    keyboardType: TextInputType.phone,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                    ],
-                    validator: (val) =>
-                    val!.isEmpty ? 'Please enter a number' : null,
-                  ),
-                  const SizedBox(height: 24),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel'),
-                      ),
-                      const SizedBox(width: 12),
-                      ElevatedButton(
-                        onPressed: () async {
-                          if (formKey.currentState!.validate()) {
-                            String result = await authService.updateContactNumber(
-                              mobileController.text,
-                            );
-
-                            Navigator.pop(context); // Close dialog
-
-                            if (result == "Success") {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Contact number updated!'),
-                                  backgroundColor: Colors.green,
-                                ),
-                              );
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(result),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
-                            }
-                          }
-                        },
-                        child: const Text('Update'),
-                      ),
-                    ],
-                  ),
-                ],
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Center(
+          child: Text("Change Contact Number", style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 18)),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.phone_outlined),
+                labelText: "New Mobile Number",
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
               ),
             ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
           ),
-        );
-      },
+          ElevatedButton(
+            onPressed: () async {
+              if (controller.text.isNotEmpty) {
+                await FirebaseFirestore.instance.collection('users').doc(_currentUser!.uid).update({'phoneNumber': controller.text});
+                if (mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Contact number updated!")));
+                }
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.teal,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text("Update"),
+          ),
+        ],
+      ),
     );
   }
 
-  // --- Clear Cache (same as before) ---
-  Future<void> _clearCache(BuildContext context) async {
-    // ... (code is unchanged)
-    try {
-      final tempDir = await getTemporaryDirectory();
-
-      if (tempDir.existsSync()) {
-        tempDir.deleteSync(recursive: true);
-        tempDir.createSync(recursive: true);
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('App cache cleared!'),
-          backgroundColor: Colors.green,
-        ),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to clear cache: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
-    }
-  }
-
-  // --- Delete Account (same as before) ---
-  void _showDeleteAccountDialog(BuildContext context, AuthService authService) {
-    // ... (code is unchanged)
-    final formKey = GlobalKey<FormState>();
-    final passwordController = TextEditingController();
+  // --- 2. CHANGE MAIL DIALOG ---
+  void _showChangeMailDialog() {
+    final emailController = TextEditingController();
+    final passController = TextEditingController();
     bool obscurePass = true;
 
     showDialog(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
+      builder: (context) => StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('Delete Account', style: TextStyle(color: Colors.red)),
-              content: Form(
-                key: formKey,
+              title: const Center(
+                child: Text("Change Email", style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 18)),
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.mail_outline),
+                      labelText: "New Email Address",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: passController,
+                    obscureText: obscurePass,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.lock_outline),
+                      labelText: "Current Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      suffixIcon: IconButton(
+                        icon: Icon(obscurePass ? Icons.visibility_off : Icons.visibility),
+                        onPressed: () => setState(() => obscurePass = !obscurePass),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (emailController.text.isNotEmpty && passController.text.isNotEmpty) {
+                      try {
+                        // Re-auth first
+                        AuthCredential credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: passController.text);
+                        await _currentUser!.reauthenticateWithCredential(credential);
+                        // Update Email
+                        await _currentUser!.verifyBeforeUpdateEmail(emailController.text);
+                        await FirebaseFirestore.instance.collection('users').doc(_currentUser!.uid).update({'email': emailController.text});
+
+                        if (mounted) {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Verification email sent! Please verify to complete change.")));
+                        }
+                      } catch (e) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text("Update"),
+                ),
+              ],
+            );
+          }
+      ),
+    );
+  }
+
+  // --- 3. CHANGE PASSWORD DIALOG ---
+  void _showChangePasswordDialog() {
+    final currentController = TextEditingController();
+    final newController = TextEditingController();
+    final confirmController = TextEditingController();
+    bool obsCurrent = true;
+    bool obsNew = true;
+    bool obsConfirm = true;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Center(
+                child: Text("Change Password", style: TextStyle(color: Colors.teal, fontWeight: FontWeight.bold, fontSize: 18)),
+              ),
+              content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                        'This is permanent. All your data will be lost. Please enter your password to confirm.'),
-                    const SizedBox(height: 24),
-                    TextFormField(
-                      controller: passwordController,
-                      obscureText: obscurePass,
+                    TextField(
+                      controller: currentController,
+                      obscureText: obsCurrent,
                       decoration: InputDecoration(
-                        labelText: 'Current Password',
                         prefixIcon: const Icon(Icons.lock_outline),
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            obscurePass ? Icons.visibility_off : Icons.visibility,
-                          ),
-                          onPressed: () {
-                            setState(() {
-                              obscurePass = !obscurePass;
-                            });
-                          },
-                        ),
+                        labelText: "Current Password",
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        suffixIcon: IconButton(icon: Icon(obsCurrent ? Icons.visibility_off : Icons.visibility), onPressed: () => setState(() => obsCurrent = !obsCurrent)),
                       ),
-                      validator: (val) =>
-                      val!.isEmpty ? 'Please enter your password' : null,
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: newController,
+                      obscureText: obsNew,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        labelText: "New Password",
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        suffixIcon: IconButton(icon: Icon(obsNew ? Icons.visibility_off : Icons.visibility), onPressed: () => setState(() => obsNew = !obsNew)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: confirmController,
+                      obscureText: obsConfirm,
+                      decoration: InputDecoration(
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        labelText: "Confirm New Password",
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        suffixIcon: IconButton(icon: Icon(obsConfirm ? Icons.visibility_off : Icons.visibility), onPressed: () => setState(() => obsConfirm = !obsConfirm)),
+                      ),
                     ),
                   ],
                 ),
@@ -386,43 +212,121 @@ class SettingsScreen extends StatelessWidget {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
                 ),
                 ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red[700]),
                   onPressed: () async {
-                    if (formKey.currentState!.validate()) {
-                      showDialog(
-                        context: context,
-                        barrierDismissible: false,
-                        builder: (context) => const Center(
-                          child: CircularProgressIndicator(),
-                        ),
-                      );
-
-                      String result = await authService.deleteAccount(
-                        currentPassword: passwordController.text,
-                      );
-
-                      Navigator.pop(context); // Close loading dialog
-
-                      if (result == "Success") {
-                        Navigator.pop(context); // Close delete dialog
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(result),
-                            backgroundColor: Colors.red,
-                          ),
-                        );
+                    if (newController.text != confirmController.text) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("New passwords do not match")));
+                      return;
+                    }
+                    try {
+                      AuthCredential credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: currentController.text);
+                      await _currentUser!.reauthenticateWithCredential(credential);
+                      await _currentUser!.updatePassword(newController.text);
+                      if (mounted) {
+                        Navigator.pop(context);
+                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Password changed successfully!")));
                       }
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
                     }
                   },
-                  child: const Text('Delete My Account'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.teal,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text("Change"),
                 ),
               ],
             );
-          },
+          }
+      ),
+    );
+  }
+
+  // --- 4. DELETE ACCOUNT DIALOG ---
+  void _showDeleteAccountDialog() {
+    final passController = TextEditingController();
+    bool obscurePass = true;
+
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text("Delete Account", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 18)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("This is permanent. All your data will be lost. Please enter your password to confirm.", style: TextStyle(fontSize: 14)),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: passController,
+                    obscureText: obscurePass,
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.lock_outline),
+                      labelText: "Current Password",
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      suffixIcon: IconButton(icon: Icon(obscurePass ? Icons.visibility_off : Icons.visibility), onPressed: () => setState(() => obscurePass = !obscurePass)),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Cancel", style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    try {
+                      AuthCredential credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: passController.text);
+                      await _currentUser!.reauthenticateWithCredential(credential);
+                      await FirebaseFirestore.instance.collection('users').doc(_currentUser!.uid).delete();
+                      await _currentUser!.delete();
+                      // App will likely restart or go to login due to auth listener
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: const Text("Delete My Account"),
+                ),
+              ],
+            );
+          }
+      ),
+    );
+  }
+
+  // --- 5. CLEAR CACHE ---
+  void _clearCache() {
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Cache cleared successfully!")));
+  }
+
+  // --- 6. THEME SELECTOR ---
+  void _showThemeDialog(ThemeService themeService) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: const Text("Select Theme"),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          children: [
+            RadioListTile<ThemeMode>(title: const Text("System Default"), value: ThemeMode.system, groupValue: themeService.themeMode, onChanged: (val) { themeService.setTheme(val!); Navigator.pop(context); }),
+            RadioListTile<ThemeMode>(title: const Text("Light"), value: ThemeMode.light, groupValue: themeService.themeMode, onChanged: (val) { themeService.setTheme(val!); Navigator.pop(context); }),
+            RadioListTile<ThemeMode>(title: const Text("Dark"), value: ThemeMode.dark, groupValue: themeService.themeMode, onChanged: (val) { themeService.setTheme(val!); Navigator.pop(context); }),
+          ],
         );
       },
     );
@@ -430,109 +334,136 @@ class SettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final themeService = Provider.of<ThemeService>(context, listen: false);
-    final authService = Provider.of<AuthService>(context, listen: false);
-
-    String currentTheme;
-    switch (Provider.of<ThemeService>(context).themeMode) {
-      case ThemeMode.light: currentTheme = 'Light'; break;
-      case ThemeMode.dark: currentTheme = 'Dark'; break;
-      case ThemeMode.system: currentTheme = 'System default'; break;
-    }
+    final themeService = Provider.of<ThemeService>(context);
+    String themeText = "System";
+    if (themeService.themeMode == ThemeMode.light) themeText = "Light";
+    if (themeService.themeMode == ThemeMode.dark) themeText = "Dark";
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
-      ),
-      body: ListView(
-        children: [
-          // --- Theme Section ---
-          ListTile(
-            leading: const Icon(Icons.brightness_6_outlined),
-            title: const Text('Theme'),
-            subtitle: Text(currentTheme),
-            onTap: () {
-              _showThemeDialog(context, themeService);
-            },
-          ),
+      appBar: AppBar(title: const Text("Settings"), centerTitle: false),
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance.collection('users').doc(_currentUser?.uid).snapshots(),
+        builder: (context, snapshot) {
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
-          const Divider(),
+          var userData = snapshot.data!.data() as Map<String, dynamic>? ?? {};
+          String name = userData['name'] ?? 'User';
+          String email = userData['email'] ?? _currentUser?.email ?? 'No Email';
+          String phone = userData['phoneNumber'] ?? 'No Phone';
+          String? avatar = userData['avatar'];
 
-          // --- Account Section ---
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text('Account', style: TextStyle( /*...*/ )),
-          ),
-          ListTile(
-            leading: const Icon(Icons.lock_outline),
-            title: const Text('Change Password'),
-            onTap: () {
-              _showChangePasswordDialog(context, authService);
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.phone_outlined),
-            title: const Text('Change Contact Number'),
-            onTap: () {
-              _showChangeContactDialog(context, authService);
-            },
-          ),
+          // Logic to determine Avatar Widget
+          Widget avatarWidget;
+          if (avatar != null && avatar.startsWith('http')) {
+            avatarWidget = CircleAvatar(radius: 40, backgroundImage: NetworkImage(avatar), backgroundColor: Colors.grey);
+          } else if (avatar != null && avatar.isNotEmpty) {
+            avatarWidget = CircleAvatar(radius: 40, backgroundColor: Theme.of(context).primaryColor, child: Text(avatar, style: const TextStyle(fontSize: 35)));
+          } else {
+            avatarWidget = CircleAvatar(radius: 40, backgroundColor: Theme.of(context).primaryColor, child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?', style: const TextStyle(fontSize: 35, color: Colors.white)));
+          }
 
-          const Divider(),
+          return SingleChildScrollView(
+            child: Column(
+              children: [
+                // PROFILE HEADER
+                Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AvatarSelectorScreen())),
+                        child: Stack(
+                          children: [
+                            avatarWidget,
+                            Positioned(
+                              bottom: 0, right: 0,
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: const BoxDecoration(color: Colors.grey, shape: BoxShape.circle),
+                                child: const Icon(Icons.camera_alt, size: 14, color: Colors.white),
+                              ),
+                            )
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 20),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 8),
+                            Row(children: [const Icon(Icons.phone, size: 14, color: Colors.grey), const SizedBox(width: 6), Text(phone, style: const TextStyle(color: Colors.grey))]),
+                            const SizedBox(height: 4),
+                            Row(children: [const Icon(Icons.mail_outline, size: 14, color: Colors.grey), const SizedBox(width: 6), Expanded(child: Text(email, style: const TextStyle(color: Colors.grey), overflow: TextOverflow.ellipsis))]),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(),
 
-          // --- App Section ---
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text('About & Support', style: TextStyle( /*...*/ )),
-          ),
-          ListTile(
-            leading: const Icon(Icons.help_outline),
-            title: const Text('Help'),
-            onTap: () {
-              // --- 3. ADDED NAVIGATION ---
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const HelpScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.quiz_outlined),
-            title: const Text('FAQs'),
-            onTap: () {
-              // --- 4. ADDED NAVIGATION ---
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const FaqsScreen()),
-              );
-            },
-          ),
-
-          const Divider(),
-
-          // --- Danger Zone Section ---
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text('App Data', style: TextStyle( /*...*/ )),
-          ),
-          ListTile(
-            leading: const Icon(Icons.delete_sweep_outlined),
-            title: const Text('Clear App Cache'),
-            onTap: () {
-              _clearCache(context);
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.delete_forever_outlined, color: Colors.red[700]),
-            title: Text(
-              'Delete Account',
-              style: TextStyle(color: Colors.red[700]),
+                // SETTINGS LIST
+                ListTile(
+                  leading: const Icon(Icons.palette_outlined),
+                  title: const Text("Theme"),
+                  subtitle: Text(themeText),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: () => _showThemeDialog(themeService),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.mail_outline),
+                  title: const Text("Change Mail"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: _showChangeMailDialog,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.lock_outline),
+                  title: const Text("Change Password"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: _showChangePasswordDialog,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.phone_in_talk_outlined),
+                  title: const Text("Change Contact Number"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: _showChangePhoneDialog,
+                ),
+                // --- CLEAR CACHE BUTTON ---
+                ListTile(
+                  leading: const Icon(Icons.cleaning_services_outlined),
+                  title: const Text("Clear Cache"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: _clearCache,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.help_outline),
+                  title: const Text("Help"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HelpScreen())),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.chat_bubble_outline),
+                  title: const Text("FAQ's"),
+                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const FaqsScreen())),
+                ),
+                const Padding(padding: EdgeInsets.symmetric(horizontal: 16.0), child: Divider()),
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, color: Colors.red),
+                  title: const Text("Delete Account", style: TextStyle(color: Colors.red)),
+                  onTap: _showDeleteAccountDialog,
+                ),
+                ListTile(
+                  leading: const Icon(Icons.logout),
+                  title: const Text("Logout"),
+                  onTap: () => _authService.signOut(),
+                ),
+              ],
             ),
-            onTap: () {
-              _showDeleteAccountDialog(context, authService);
-            },
-          ),
-        ],
+          );
+        },
       ),
     );
   }

@@ -34,6 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Streamix'),
         actions: [
+          // Sync Button (Manual Refresh)
           IconButton(
             icon: const Icon(Icons.sync),
             tooltip: 'Sync Users',
@@ -65,6 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: Column(
         children: [
+          // --- Search Bar ---
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: TextField(
@@ -101,6 +103,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
 
+          // --- User List with Sorting & Smart Avatars ---
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               // 1. Fetch All Users
@@ -113,7 +116,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   return const Center(child: Text('No users found.'));
                 }
 
-                // 2. Fetch Requests
+                // 2. Fetch Requests (To determine sorting order)
                 return StreamBuilder<QuerySnapshot>(
                   stream: FirebaseFirestore.instance
                       .collection('requests')
@@ -124,6 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       .snapshots(),
                   builder: (context, requestSnapshot) {
 
+                    // Logic: Map UserID -> Last Interaction Date
                     Map<String, DateTime> lastInteractionMap = {};
 
                     if (requestSnapshot.hasData) {
@@ -133,6 +137,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         String pId = data['peerUserId'];
                         Timestamp? time;
 
+                        // Prioritize scheduled start time, fallback to created time
                         if (data['startTime'] != null) {
                           time = data['startTime'] as Timestamp;
                         } else if (data['createdAt'] != null) {
@@ -143,6 +148,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                         if (time != null) {
                           DateTime docTime = time.toDate();
+                          // Keep the LATEST time found
                           if (!lastInteractionMap.containsKey(otherUserId) ||
                               docTime.isAfter(lastInteractionMap[otherUserId]!)) {
                             lastInteractionMap[otherUserId] = docTime;
@@ -151,9 +157,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       }
                     }
 
+                    // Filter Users (Remove self + Apply search)
                     final users = userSnapshot.data!.docs.where((doc) {
                       final data = doc.data() as Map<String, dynamic>;
                       if (data['uid'] == _currentUserId) return false;
+
                       if (_searchQuery.isEmpty) return true;
                       final name = (data['name'] as String? ?? '').toLowerCase();
                       final email = (data['email'] as String? ?? '').toLowerCase();
@@ -161,6 +169,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     }).toList();
 
                     // --- SORTING LOGIC ---
+                    // 1. Recent interactions first. 2. Alphabetical.
                     users.sort((a, b) {
                       final dataA = a.data() as Map<String, dynamic>;
                       final dataB = b.data() as Map<String, dynamic>;
@@ -191,14 +200,41 @@ class _HomeScreenState extends State<HomeScreen> {
                         final userName = userData['name'] ?? 'No Name';
                         final userEmail = userData['email'] ?? 'No Email';
                         final peerUserId = userData['uid'];
+
+                        // Get Avatar Field
+                        final userAvatar = userData['avatar'] as String?;
+
+                        // Check if this is a recent contact (Green Ring logic)
                         bool isRecent = lastInteractionMap.containsKey(peerUserId);
+                        Color avatarBg = isRecent ? Colors.green : Theme.of(context).primaryColor;
+
+                        // --- SMART AVATAR WIDGET ---
+                        Widget avatarWidget;
+                        if (userAvatar != null && userAvatar.startsWith('http')) {
+                          // Case 1: Image URL (Photo)
+                          avatarWidget = CircleAvatar(
+                            backgroundColor: avatarBg,
+                            backgroundImage: NetworkImage(userAvatar),
+                          );
+                        } else if (userAvatar != null && userAvatar.isNotEmpty) {
+                          // Case 2: Emoji
+                          avatarWidget = CircleAvatar(
+                            backgroundColor: avatarBg,
+                            child: Text(userAvatar, style: const TextStyle(fontSize: 24)),
+                          );
+                        } else {
+                          // Case 3: Initials Fallback
+                          avatarWidget = CircleAvatar(
+                            backgroundColor: avatarBg,
+                            child: Text(
+                              userName.isNotEmpty ? userName[0].toUpperCase() : '?',
+                              style: const TextStyle(color: Colors.white),
+                            ),
+                          );
+                        }
 
                         return ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: isRecent ? Colors.green : Theme.of(context).primaryColor,
-                            foregroundColor: Colors.white,
-                            child: Text(userName.isNotEmpty ? userName[0].toUpperCase() : '?'),
-                          ),
+                          leading: avatarWidget,
                           title: Text(
                             userName,
                             style: TextStyle(
@@ -230,6 +266,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
+
+      // --- "My Requests" FAB with Count Badge ---
       floatingActionButton: StreamBuilder<QuerySnapshot>(
         stream: _ticketService.getIncomingRequestsStream(),
         builder: (context, snapshot) {
@@ -237,6 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
           if (snapshot.hasData) {
             requestCount = snapshot.data!.docs.length;
           }
+
           return Badge(
             label: Text('$requestCount'),
             isLabelVisible: requestCount > 0,

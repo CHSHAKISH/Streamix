@@ -83,4 +83,53 @@ build/
 /ios/Flutter/engine.framework
 /ios/Flutter/flutter_assets/
 
+# ============================
+#          Android
+# ============================
+
+android/gradlew
+android/gradlew.bat
+android/local.properties
+android/app/google-services.json        # IMPORTANT: Hide Firebase Config
+android/.gradle
+android/captures/
+android/gradle/
+android/**/generated/
+android/**/gradle/
+android/**/build/
+
+# ============================
+#             iOS
+# ============================
+
+ios/.mode1v3
+ios/.mode2v3
+ios/.moved-aside
+ios/.pbxuser
+ios/.perspectivev3
+ios/.woa
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Generated.xcconfig
+ios/Flutter/app.flx
+ios/Flutter/app.zip
+ios/ServiceDefinitions.json
+ios/Runner/GeneratedPluginRegistrant.*
+ios/Runner/GoogleService-Info.plist     # IMPORTANT: Hide Firebase Config
+
+# ============================
+#   Exceptions to above rules
+# ============================
+
+!/packages/flutter_tools/test/data/dart_dependencies_test/**/.packages
+
+# ============================
+#   Sensitive Keys & ENV Files
+# ============================
+
+.env
+assets/service_account.json            # Google Service Account (Critical)
+supabase/functions/.env
+
+
 
