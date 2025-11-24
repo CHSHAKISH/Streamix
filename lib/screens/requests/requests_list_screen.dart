@@ -4,8 +4,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:streamix/screens/session/active_session_screen.dart'; // CAMERA SCREEN
-import 'package:streamix/screens/session/audio_session_screen.dart'; // AUDIO SCREEN
+import 'package:streamix/screens/session/active_session_screen.dart'; // Photo
+import 'package:streamix/screens/session/audio_session_screen.dart';  // Audio
+import 'package:streamix/screens/session/video_session_screen.dart';  // NEW: Video
 import 'package:streamix/services/ticket_service.dart';
 
 class RequestsListScreen extends StatefulWidget {
@@ -35,27 +36,15 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
     super.dispose();
   }
 
-  // --- ROUTING LOGIC ---
+  // --- CENTRALIZED ROUTER ---
   void _openSession(String requestId, String service) {
     if (service == 'audio') {
-      // Route to New Audio Screen
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => AudioSessionScreen(requestId: requestId),
-        ),
-      );
+      Navigator.push(context, MaterialPageRoute(builder: (_) => AudioSessionScreen(requestId: requestId)));
+    } else if (service.contains('video')) {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => VideoSessionScreen(requestId: requestId, serviceType: service)));
     } else {
-      // Route to Existing Camera Screen
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ActiveSessionScreen(
-            requestId: requestId,
-            serviceType: service,
-          ),
-        ),
-      );
+      // Camera (Front/Back Photo)
+      Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(requestId: requestId, serviceType: service)));
     }
   }
 
@@ -98,13 +87,13 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                 bool isAccepted = status == 'accepted';
                 bool isCompleted = status == 'completed';
 
-                // Auto Services: Audio OR Camera
-                bool isAutoService = service.contains('camera') || service == 'audio';
+                // Check if service supports Auto-Start (Camera, Audio, Video)
+                bool isAutoService = service.contains('camera') || service == 'audio' || service.contains('video');
 
                 bool isExpired = now.isAfter(endTime);
                 bool isFuture = now.isBefore(startTime);
 
-                // Show Button Logic
+                // Button Logic
                 bool showRetryButton = isCompleted && !isExpired;
 
                 return Card(
@@ -153,9 +142,13 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                                 onPressed: () async {
                                   if (isAutoService) {
-                                    var p = service == 'audio' ? Permission.microphone : Permission.camera;
-                                    var status = await p.request();
-                                    if (status.isDenied) return;
+                                    // Permission Check based on Type
+                                    var perms = <Permission>[];
+                                    if (service.contains('camera') || service.contains('video')) perms.add(Permission.camera);
+                                    if (service == 'audio' || service.contains('video')) perms.add(Permission.microphone);
+
+                                    Map<Permission, PermissionStatus> statuses = await perms.request();
+                                    if (statuses.values.any((s) => s.isDenied)) return;
                                   }
                                   await _ticketService.updateRequestStatus(requestId, true);
 
@@ -171,11 +164,10 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                         // --- 2. RETRY / RE-OPEN ---
                         if (isAutoService)
                           if (isAccepted && !isExpired)
-                          // Accepted but maybe closed app before finishing
                             Align(
                               alignment: Alignment.centerRight,
                               child: ElevatedButton.icon(
-                                icon: Icon(service == 'audio' ? Icons.mic : Icons.camera_alt),
+                                icon: const Icon(Icons.play_arrow),
                                 label: const Text("OPEN SESSION"),
                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                                 onPressed: () => _openSession(requestId, service),
@@ -191,7 +183,11 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                 ),
                                 ElevatedButton.icon(
                                   icon: const Icon(Icons.refresh),
-                                  label: Text(service == 'audio' ? "RECORD AGAIN" : "CLICK AGAIN"),
+                                  // Dynamic Label
+                                  label: Text(
+                                      service == 'audio' ? "RECORD AGAIN" :
+                                      service.contains('video') ? "REC VIDEO AGAIN" : "CLICK AGAIN"
+                                  ),
                                   style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
                                   onPressed: () => _openSession(requestId, service),
                                 ),

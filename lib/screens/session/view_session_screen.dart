@@ -65,7 +65,7 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
               ));
             }
 
-            // VIDEO PLAYER
+            // VIDEO PLAYER (FIXED WITH CONTROLS)
             if (widget.serviceType.contains('video')) {
               return _VideoPlayerWidget(videoUrl: mediaUrl);
             }
@@ -88,8 +88,8 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
                 const CircularProgressIndicator(),
                 const SizedBox(height: 20),
                 Text(
-                  widget.serviceType == 'audio'
-                      ? "Waiting for audio upload..."
+                  widget.serviceType.contains('video')
+                      ? "Waiting for video upload..."
                       : "Waiting for sender...",
                   style: const TextStyle(color: Colors.white),
                 )
@@ -97,6 +97,86 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+// --- VIDEO PLAYER WITH CONTROLS ---
+class _VideoPlayerWidget extends StatefulWidget {
+  final String videoUrl;
+  const _VideoPlayerWidget({required this.videoUrl});
+  @override
+  State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
+}
+
+class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
+  late VideoPlayerController _controller;
+  bool _isInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
+      ..initialize().then((_) {
+        setState(() {
+          _isInitialized = true;
+          _controller.setLooping(true); // Auto-loop
+          _controller.play(); // Auto-play on load
+        });
+      });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return Center(
+      child: AspectRatio(
+        aspectRatio: _controller.value.aspectRatio,
+        child: Stack(
+          alignment: Alignment.bottomCenter,
+          children: [
+            VideoPlayer(_controller),
+
+            // Play/Pause Overlay
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _controller.value.isPlaying ? _controller.pause() : _controller.play();
+                });
+              },
+              child: Container(
+                color: Colors.transparent, // Hitbox
+                child: Center(
+                  child: AnimatedOpacity(
+                    opacity: _controller.value.isPlaying ? 0.0 : 1.0,
+                    duration: const Duration(milliseconds: 300),
+                    child: Container(
+                      decoration: BoxDecoration(
+                          color: Colors.black45,
+                          shape: BoxShape.circle
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      child: const Icon(Icons.play_arrow, size: 60, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // Progress Bar
+            VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: Colors.red)),
+          ],
+        ),
       ),
     );
   }
@@ -235,29 +315,6 @@ class _LocationViewerState extends State<_LocationViewer> {
           ],
         );
       },
-    );
-  }
-}
-
-// --- VIDEO PLAYER STUB ---
-class _VideoPlayerWidget extends StatefulWidget {
-  final String videoUrl;
-  const _VideoPlayerWidget({required this.videoUrl});
-  @override
-  State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
-}
-class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
-  late VideoPlayerController _controller;
-  @override
-  void initState() { super.initState(); _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))..initialize().then((_) => setState(() {})); }
-  @override
-  void dispose() { _controller.dispose(); super.dispose(); }
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: _controller.value.isInitialized
-          ? AspectRatio(aspectRatio: _controller.value.aspectRatio, child: VideoPlayer(_controller))
-          : const CircularProgressIndicator(),
     );
   }
 }
