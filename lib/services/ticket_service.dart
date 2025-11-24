@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/services.dart'; // For rootBundle
-import 'package:googleapis_auth/auth_io.dart'; // For V1 Auth
+import 'package:flutter/services.dart';
+import 'package:googleapis_auth/auth_io.dart';
 import 'package:http/http.dart' as http;
 
 class TicketService {
@@ -10,99 +10,77 @@ class TicketService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
 
-  // --- NOTIFICATION SENDER (V1 DIRECT) ---
+  // --- NOTIFICATION SENDER ---
   Future<void> _sendNotificationV1({
-    required String peerUserId,
+    required String targetUserId,
     required String title,
     required String body,
-    required String requestId,
+    required String type,
   }) async {
     try {
-      // 1. Get Peer's Token
-      DocumentSnapshot peerDoc = await _firestore.collection('users').doc(peerUserId).get();
-      if (!peerDoc.exists) return;
+      DocumentSnapshot userDoc = await _firestore.collection('users').doc(targetUserId).get();
+      if (!userDoc.exists) return;
 
-      Map<String, dynamic> peerData = peerDoc.data() as Map<String, dynamic>;
-      String? fcmToken = peerData['fcmToken'];
+      Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
+      String? fcmToken = userData['fcmToken'];
 
-      if (fcmToken == null) {
-        print("⚠️ [Notification] Peer has no FCM token.");
-        return;
-      }
+      if (fcmToken == null) return;
 
-      // 2. Get Access Token from Service Account
       final String accessToken = await _getAccessToken();
       final String projectId = await _getProjectId();
 
-      // 3. Send Request to FCM V1 Endpoint
-      final response = await http.post(
+      await http.post(
         Uri.parse('https://fcm.googleapis.com/v1/projects/$projectId/messages:send'),
-        headers: <String, String>{
+        headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $accessToken',
         },
-        body: jsonEncode(
-          <String, dynamic>{
-            'message': {
-              'token': fcmToken,
+        body: jsonEncode({
+          'message': {
+            'token': fcmToken,
+            'notification': {
+              'title': title,
+              'body': body,
+            },
+            'data': {
+              'type': type,
+              'click_action': 'FLUTTER_NOTIFICATION_CLICK',
+            },
+            'android': {
+              'priority': 'high',
               'notification': {
-                'title': title,
-                'body': body,
-              },
-              'data': {
-                'requestId': requestId,
-                'click_action': 'FLUTTER_NOTIFICATION_CLICK',
-                'status': 'done'
-              },
-              'android': {
-                'priority': 'high',
-                'notification': {
-                  'channel_id': 'high_importance_channel',
-                  'default_sound': true,
-                  'default_vibrate_timings': true,
-                }
+                'channel_id': 'high_importance_channel',
+                'default_sound': true,
+                'default_vibrate_timings': true,
+                'priority': 'max',
+                'visibility': 'public'
               }
             }
-          },
-        ),
+          }
+        }),
       );
-
-      if (response.statusCode == 200) {
-        print("✅ [Notification] Sent successfully (V1)!");
-      } else {
-        print("❌ [Notification] Failed: ${response.body}");
-      }
-
     } catch (e) {
       print("❌ [Notification] Error: $e");
     }
   }
 
-  // Helper: Load Service Account and Mint Token
   Future<String> _getAccessToken() async {
-    // Load the file from assets
     final jsonString = await rootBundle.loadString('assets/service_account.json');
     final accountCredentials = ServiceAccountCredentials.fromJson(jsonString);
-
-    // Define scopes required for FCM
-    final scopes = ['https://www.googleapis.com/auth/firebase.messaging'];
-
-    // Authenticate
-    final authClient = await clientViaServiceAccount(accountCredentials, scopes);
+    final authClient = await clientViaServiceAccount(accountCredentials, ['https://www.googleapis.com/auth/firebase.messaging']);
     final accessToken = authClient.credentials.accessToken.data;
-    authClient.close(); // Close the client to free resources
-
+    authClient.close();
     return accessToken;
   }
 
-  // Helper: Get Project ID from JSON
   Future<String> _getProjectId() async {
     final jsonString = await rootBundle.loadString('assets/service_account.json');
-    final map = jsonDecode(jsonString);
-    return map['project_id'];
+    return jsonDecode(jsonString)['project_id'];
   }
 
-  /// Creates a new scheduled request AND Sends Notification
+  // --- BUSINESS LOGIC ---
+
+  // 1. Create Request
   Future<String> createScheduledRequest({
     required String peerUserId,
     required String serviceType,
@@ -110,11 +88,9 @@ class TicketService {
     required Timestamp endTime,
   }) async {
     try {
-      DocumentSnapshot userDoc = await _firestore.collection('users').doc(_currentUserId).get();
-      Map<String, dynamic> userData = userDoc.data() as Map<String, dynamic>;
-      String myName = userData['name'] ?? userData['email'];
+      DocumentSnapshot myDoc = await _firestore.collection('users').doc(_currentUserId).get();
+      String myName = (myDoc.data() as Map)['name'] ?? 'User';
 
-      // 1. Create Request in Firestore
       DocumentReference ref = await _firestore.collection('requests').add({
         'requesterId': _currentUserId,
         'requesterName': myName,
@@ -126,12 +102,11 @@ class TicketService {
         'createdAt': Timestamp.now(),
       });
 
-      // 2. Send Notification
       await _sendNotificationV1(
-        peerUserId: peerUserId,
+        targetUserId: peerUserId,
         title: "New Request",
         body: "$myName requested $serviceType",
-        requestId: ref.id,
+        type: 'request',
       );
 
       return "Success";
@@ -140,15 +115,60 @@ class TicketService {
     }
   }
 
-  // ... Standard Firestore Methods ...
+  // 2. Update Status (Accept/Deny)
+  Future<void> updateRequestStatus(String requestId, bool accepted) async {
+    DocumentSnapshot doc = await _firestore.collection('requests').doc(requestId).get();
+    String requesterId = doc['requesterId'];
+
+    DocumentSnapshot myDoc = await _firestore.collection('users').doc(_currentUserId).get();
+    String myName = (myDoc.data() as Map)['name'] ?? 'User';
+
+    String status = accepted ? 'accepted' : 'denied';
+    await _firestore.collection('requests').doc(requestId).update({'status': status});
+
+    await _sendNotificationV1(
+      targetUserId: requesterId,
+      title: accepted ? "Request Accepted" : "Request Denied",
+      body: "$myName has $status your request.",
+      type: 'status',
+    );
+  }
+
+  // 3. Notify Session Started (THIS WAS MISSING)
+  Future<void> notifySessionStarted(String requestId) async {
+    DocumentSnapshot doc = await _firestore.collection('requests').doc(requestId).get();
+    String requesterId = doc['requesterId'];
+    String service = doc['serviceType'];
+
+    await _sendNotificationV1(
+      targetUserId: requesterId,
+      title: "Session Started",
+      body: "$service is live now.",
+      type: 'start',
+    );
+  }
+
+  // 4. Complete Request
+  Future<void> completeRequest(String requestId) async {
+    await _firestore.collection('requests').doc(requestId).update({'status': 'completed'});
+  }
+
+  Future<void> completeRequestWithMedia(String requestId, String mediaUrl) async {
+    await _firestore.collection('requests').doc(requestId).update({
+      'status': 'completed',
+      'mediaUrl': mediaUrl
+    });
+  }
+
   Future<void> updateRequestMedia(String requestId, String mediaUrl) async {
     await _firestore.collection('requests').doc(requestId).update({'mediaUrl': mediaUrl});
   }
 
-  Future<void> completeRequestWithMedia(String requestId, String mediaUrl) async {
-    await _firestore.collection('requests').doc(requestId).update({'status': 'completed', 'mediaUrl': mediaUrl});
+  Future<void> deleteRequest(String requestId) async {
+    await _firestore.collection('requests').doc(requestId).delete();
   }
 
+  // Streams
   Stream<QuerySnapshot> getChatHistoryStream(String peerUserId) {
     return _firestore.collection('requests').where(Filter.or(
       Filter.and(Filter('requesterId', isEqualTo: _currentUserId), Filter('peerUserId', isEqualTo: peerUserId)),
@@ -158,17 +178,5 @@ class TicketService {
 
   Stream<QuerySnapshot> getIncomingRequestsStream() {
     return _firestore.collection('requests').where('peerUserId', isEqualTo: _currentUserId).where('status', isEqualTo: 'pending').orderBy('startTime', descending: false).snapshots();
-  }
-
-  Future<void> updateRequestStatus(String requestId, bool accepted) async {
-    await _firestore.collection('requests').doc(requestId).update({'status': accepted ? 'accepted' : 'denied'});
-  }
-
-  Future<void> completeRequest(String requestId) async {
-    await _firestore.collection('requests').doc(requestId).update({'status': 'completed'});
-  }
-
-  Future<void> deleteRequest(String requestId) async {
-    await _firestore.collection('requests').doc(requestId).delete();
   }
 }

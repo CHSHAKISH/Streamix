@@ -4,10 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:streamix/services/location_service.dart';
-import 'package:streamix/services/signaling_service.dart';
 import 'package:video_player/video_player.dart';
 import 'package:flutter_sound/flutter_sound.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 class ViewSessionScreen extends StatefulWidget {
   final String requestId;
@@ -28,8 +26,11 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: Text('Viewing: ${widget.serviceType}'),
+        title: Text('Viewing: ${widget.serviceType.toUpperCase()}'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
       ),
       body: StreamBuilder<DocumentSnapshot>(
         stream: FirebaseFirestore.instance
@@ -45,312 +46,200 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
 
-          // Show Media if Available (Even if Active)
+          // 1. HANDLE MEDIA PLAYBACK (Photo, Video, Audio)
           if (mediaUrl != null && mediaUrl.isNotEmpty) {
+
+            // AUDIO PLAYER
+            if (widget.serviceType == 'audio') {
+              return _AudioPlayerWidget(audioUrl: mediaUrl);
+            }
+
+            // PHOTO VIEWER
             if (widget.serviceType.contains('camera')) {
               return Center(child: Image.network(mediaUrl,
+                errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image, color: Colors.white),
                 loadingBuilder: (context, child, progress) {
                   if (progress == null) return child;
                   return const CircularProgressIndicator();
                 },
               ));
             }
+
+            // VIDEO PLAYER
             if (widget.serviceType.contains('video')) {
               return _VideoPlayerWidget(videoUrl: mediaUrl);
             }
-            if (widget.serviceType == 'audio') {
-              return _AudioPlayerWidget(audioUrl: mediaUrl);
-            }
           }
 
-          if (status == 'completed') {
-            return const Center(
-              child: Text(
-                'Session has ended.',
-                style: TextStyle(fontSize: 18, color: Colors.grey),
-              ),
-            );
+          // 2. HANDLE LIVE LOCATION
+          if (widget.serviceType == 'location') {
+            return _LocationViewer(requestId: widget.requestId);
           }
 
-          if (status == 'accepted') {
-            return _buildViewer(widget.serviceType);
+          // 3. WAITING STATE
+          if (status == 'completed' && mediaUrl == null) {
+            return const Center(child: Text('Session Ended (No Media)', style: TextStyle(color: Colors.white)));
           }
 
-          if (status == 'denied') {
-            return const Center(child: Text('Request was denied.'));
-          }
-
-          return const Center(child: Text('Waiting for request to be accepted...'));
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 20),
+                Text(
+                  widget.serviceType == 'audio'
+                      ? "Waiting for audio upload..."
+                      : "Waiting for sender...",
+                  style: const TextStyle(color: Colors.white),
+                )
+              ],
+            ),
+          );
         },
       ),
     );
   }
-
-  Widget _buildViewer(String serviceType) {
-    switch (serviceType) {
-      case 'location':
-        return _LocationViewer(requestId: widget.requestId);
-
-      case 'front_stream':
-      case 'back_stream':
-        return _VideoStreamViewer(requestId: widget.requestId);
-
-      case 'front_camera':
-      case 'back_camera':
-        return const Center(child: Text('Waiting for sender to take photo...'));
-      case 'front_video':
-      case 'back_video':
-        return const Center(child: Text('Waiting for sender to record video...'));
-      case 'audio':
-        return const Center(child: Text('Waiting for sender to record audio...'));
-
-      default:
-        return Text('Viewer for ${serviceType}');
-    }
-  }
 }
 
-class _VideoStreamViewer extends StatefulWidget {
-  final String requestId;
-  const _VideoStreamViewer({required this.requestId});
+// --- AUDIO PLAYER WIDGET ---
+class _AudioPlayerWidget extends StatefulWidget {
+  final String audioUrl;
+  const _AudioPlayerWidget({required this.audioUrl});
 
   @override
-  State<_VideoStreamViewer> createState() => _VideoStreamViewerState();
+  State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
 }
 
-class _VideoStreamViewerState extends State<_VideoStreamViewer> {
-  final SignalingService _signalingService = SignalingService();
-  RTCPeerConnection? _peerConnection;
-  final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
-  StreamSubscription? _sessionSub;
-  StreamSubscription? _candidateSub;
-
-  String _status = "Initializing...";
-  bool _hasStream = false;
-  bool _isMuted = false;
-
-  // Candidate Queue
-  List<RTCIceCandidate> _candidateQueue = [];
-  bool _isRemoteDescriptionSet = false;
-
-  final Map<String, dynamic> _iceConfig = {
-    'iceServers': [
-      {'urls': 'stun:stun.l.google.com:19302'},
-      {'urls': 'stun:stun1.l.google.com:19302'},
-      {'urls': 'stun:stun2.l.google.com:19302'},
-      {'urls': 'stun:stun3.l.google.com:19302'},
-      {'urls': 'stun:stun4.l.google.com:19302'},
-      {'urls': 'stun:stun.services.mozilla.com'},
-      {'urls': 'stun:global.stun.twilio.com:3478'},
-    ],
-    'sdpSemantics': 'unified-plan',
-  };
+class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
+  final FlutterSoundPlayer _player = FlutterSoundPlayer();
+  bool _isPlaying = false;
+  bool _isInitialized = false;
 
   @override
   void initState() {
     super.initState();
-    _initialize();
+    _initPlayer();
   }
 
-  Future<void> _initialize() async {
-    await _remoteRenderer.initialize();
-    _peerConnection = await createPeerConnection(_iceConfig);
-
-    if (mounted) setState(() => _status = "Waiting for Sender to join...");
-
-    _peerConnection?.onIceConnectionState = (RTCIceConnectionState state) {
-      if (mounted) setState(() => _status = "ICE State: ${state.toString().split('.').last}");
-    };
-
-    _peerConnection?.onTrack = (RTCTrackEvent event) {
-      if (event.streams.isNotEmpty) {
-        if (mounted) {
-          setState(() {
-            _remoteRenderer.srcObject = event.streams[0];
-            _hasStream = true;
-            _status = "Stream Received!";
-          });
-        }
-      }
-    };
-
-    _peerConnection?.onIceCandidate = (RTCIceCandidate candidate) {
-      _signalingService.addCandidate(widget.requestId, candidate, true);
-    };
-
-    _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
-      if (doc.exists) {
-        var data = doc.data() as Map<String, dynamic>;
-
-        if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
-          if (mounted) setState(() => _status = "Received Offer...");
-
-          try {
-            var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
-            await _peerConnection?.setRemoteDescription(offer);
-
-            // Flush Queue
-            _isRemoteDescriptionSet = true;
-            for (var candidate in _candidateQueue) {
-              await _peerConnection?.addCandidate(candidate);
-            }
-            _candidateQueue.clear();
-
-            var answer = await _peerConnection!.createAnswer();
-            await _peerConnection?.setLocalDescription(answer);
-            await _signalingService.createAnswer(widget.requestId, answer);
-
-            if (mounted) setState(() => _status = "Sent Answer. Connecting...");
-          } catch (e) {
-            if (mounted) setState(() => _status = "Error: $e");
-          }
-        }
-      }
-    });
-
-    _candidateSub = _signalingService.getCandidateStream(widget.requestId, true).listen((snapshot) async {
-      for (var change in snapshot.docChanges) {
-        if (change.type == DocumentChangeType.added) {
-          var data = change.doc.data() as Map<String, dynamic>;
-          var candidate = RTCIceCandidate(
-              data['candidate'],
-              data['sdpMid'],
-              data['sdpMLineIndex']
-          );
-
-          if (_isRemoteDescriptionSet && _peerConnection != null) {
-            await _peerConnection?.addCandidate(candidate);
-          } else {
-            _candidateQueue.add(candidate);
-          }
-        }
-      }
-    });
-  }
-
-  void _toggleMute() {
-    if (_remoteRenderer.srcObject != null) {
-      final audioTracks = _remoteRenderer.srcObject!.getAudioTracks();
-      if (audioTracks.isNotEmpty) {
-        bool newState = !_isMuted;
-        audioTracks[0].enabled = !newState;
-        setState(() {
-          _isMuted = newState;
-        });
-      }
-    }
+  Future<void> _initPlayer() async {
+    await _player.openPlayer();
+    setState(() => _isInitialized = true);
   }
 
   @override
   void dispose() {
-    _sessionSub?.cancel();
-    _candidateSub?.cancel();
-    _peerConnection?.dispose();
-    _remoteRenderer.dispose();
+    _player.closePlayer();
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.black,
-      child: Stack(
-        children: [
-          if (_hasStream)
-            Positioned.fill(
-              child: RTCVideoView(
-                _remoteRenderer,
-                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-              ),
-            ),
+  Future<void> _togglePlay() async {
+    if (!_isInitialized) return;
 
-          Center(
-            child: _hasStream
-                ? null
-                : Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const CircularProgressIndicator(color: Colors.white),
-                  const SizedBox(height: 16),
-                  Text(
-                    _status,
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          if (_hasStream)
-            Positioned(
-              bottom: 30,
-              right: 30,
-              child: FloatingActionButton(
-                onPressed: _toggleMute,
-                backgroundColor: _isMuted ? Colors.red : Colors.white,
-                child: Icon(
-                  _isMuted ? Icons.volume_off : Icons.volume_up,
-                  color: _isMuted ? Colors.white : Colors.black,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
+    if (_isPlaying) {
+      await _player.stopPlayer();
+      setState(() => _isPlaying = false);
+    } else {
+      await _player.startPlayer(
+          fromURI: widget.audioUrl,
+          whenFinished: () {
+            setState(() => _isPlaying = false);
+          }
+      );
+      setState(() => _isPlaying = true);
+    }
   }
-}
 
-class _AudioPlayerWidget extends StatefulWidget {
-  final String audioUrl;
-  const _AudioPlayerWidget({required this.audioUrl});
-  @override
-  State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
-}
-class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
-  final FlutterSoundPlayer _audioPlayer = FlutterSoundPlayer();
-  bool _isPlayerReady = false;
-  bool _isPlaying = false;
-  @override
-  void initState() { super.initState(); _initAudioPlayer(); }
-  Future<void> _initAudioPlayer() async { await _audioPlayer.openPlayer(); setState(() { _isPlayerReady = true; }); }
-  @override
-  void dispose() { _audioPlayer.closePlayer(); super.dispose(); }
-  Future<void> _togglePlayer() async {
-    if (!_isPlayerReady) return;
-    if (_isPlaying) { await _audioPlayer.stopPlayer(); setState(() { _isPlaying = false; }); }
-    else { await _audioPlayer.startPlayer(fromURI: widget.audioUrl, codec: Codec.aacADTS, whenFinished: () { setState(() { _isPlaying = false; }); }); setState(() { _isPlaying = true; }); }
-  }
   @override
   Widget build(BuildContext context) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          IconButton.filled(
-            icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
-            iconSize: 60,
-            onPressed: _isPlayerReady ? _togglePlayer : null,
-            style: IconButton.styleFrom(
-              backgroundColor: Theme.of(context).primaryColor,
-              foregroundColor: Colors.white,
+          Container(
+            padding: const EdgeInsets.all(30),
+            decoration: BoxDecoration(
+                color: Colors.grey[900],
+                shape: BoxShape.circle,
+                border: Border.all(color: _isPlaying ? Colors.green : Colors.white, width: 2)
             ),
+            child: Icon(Icons.music_note, size: 60, color: _isPlaying ? Colors.green : Colors.white),
           ),
-          const SizedBox(height: 20),
-          Text(_isPlaying ? 'Playing...' : 'Tap to play audio', style: const TextStyle(fontSize: 16)),
+          const SizedBox(height: 40),
+          ElevatedButton.icon(
+            icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
+            label: Text(_isPlaying ? "STOP AUDIO" : "PLAY RECORDING"),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: _isPlaying ? Colors.red : Colors.blue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15)
+            ),
+            onPressed: _togglePlay,
+          ),
         ],
       ),
     );
   }
 }
 
+// --- LOCATION VIEWER ---
+class _LocationViewer extends StatefulWidget {
+  final String requestId;
+  const _LocationViewer({required this.requestId});
+  @override
+  State<_LocationViewer> createState() => _LocationViewerState();
+}
 
+class _LocationViewerState extends State<_LocationViewer> {
+  final LocationService _locationService = LocationService();
+  final MapController _mapController = MapController();
+  LatLng? _senderPosition;
+  bool _isMapReady = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _locationService.getSessionStream(widget.requestId),
+      builder: (context, snapshot) {
+        if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+          var data = snapshot.data!.first;
+          if (data['lat'] != null && data['lng'] != null) {
+            _senderPosition = LatLng((data['lat'] as num).toDouble(), (data['lng'] as num).toDouble());
+            if (_isMapReady) _mapController.move(_senderPosition!, 16.0);
+          }
+        }
+
+        return Stack(
+          children: [
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629),
+                initialZoom: 4.0,
+                onMapReady: () { _isMapReady = true; },
+              ),
+              children: [
+                TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.streamix'),
+                if (_senderPosition != null)
+                  MarkerLayer(markers: [Marker(point: _senderPosition!, width: 80, height: 80, child: const Icon(Icons.location_on, color: Colors.red, size: 40))]),
+              ],
+            ),
+            Positioned(
+              bottom: 30, left: 20, right: 20,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(12)),
+                child: Text(_senderPosition != null ? "Tracking Target" : "Waiting for Signal...", style: const TextStyle(color: Colors.white), textAlign: TextAlign.center),
+              ),
+            )
+          ],
+        );
+      },
+    );
+  }
+}
+
+// --- VIDEO PLAYER STUB ---
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoUrl;
   const _VideoPlayerWidget({required this.videoUrl});
@@ -359,137 +248,16 @@ class _VideoPlayerWidget extends StatefulWidget {
 }
 class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
-  late Future<void> _initializeVideoPlayerFuture;
   @override
-  void initState() {
-    super.initState();
-    _controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.videoUrl),
-    );
-    _initializeVideoPlayerFuture = _controller.initialize();
-    _controller.setLooping(true);
-  }
+  void initState() { super.initState(); _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))..initialize().then((_) => setState(() {})); }
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  void dispose() { _controller.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder(
-      future: _initializeVideoPlayerFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.done) {
-          return Center(
-            child: AspectRatio(
-              aspectRatio: _controller.value.aspectRatio,
-              child: Stack(
-                alignment: Alignment.bottomCenter,
-                children: [
-                  VideoPlayer(_controller),
-                  IconButton(
-                    iconSize: 60,
-                    color: Colors.white.withOpacity(0.8),
-                    icon: Icon(
-                      _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        _controller.value.isPlaying
-                            ? _controller.pause()
-                            : _controller.play();
-                      });
-                    },
-                  ),
-                ],
-              ),
-            ),
-          );
-        } else {
-          return const Center(
-            child: CircularProgressIndicator(),
-          );
-        }
-      },
-    );
-  }
-}
-
-// --- UPDATED LOCATION VIEWER ---
-class _LocationViewer extends StatefulWidget {
-  final String requestId;
-  const _LocationViewer({required this.requestId});
-  @override
-  State<_LocationViewer> createState() => _LocationViewerState();
-}
-class _LocationViewerState extends State<_LocationViewer> {
-  final LocationService _locationService = LocationService();
-  final MapController _mapController = MapController();
-  LatLng? _senderPosition;
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<Map<String, dynamic>>(
-      stream: _locationService.getSessionStream(widget.requestId),
-      builder: (context, snapshot) {
-        // Update position if data arrives
-        if (snapshot.hasData && snapshot.data != null && snapshot.data!.isNotEmpty) {
-          var data = snapshot.data!;
-          if (data['lat'] != null && data['lng'] != null) {
-            // Important: Use double parsing to be safe
-            double lat = (data['lat'] as num).toDouble();
-            double lng = (data['lng'] as num).toDouble();
-            _senderPosition = LatLng(lat, lng);
-
-            // Move map to new position
-            // Note: Only move if user hasn't interacted heavily, or just force move for "Tracking" style
-            _mapController.move(_senderPosition!, 16.0);
-          }
-        }
-
-        return FlutterMap(
-          mapController: _mapController,
-          options: MapOptions(
-            initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629), // Default India
-            initialZoom: _senderPosition == null ? 4.0 : 16.0,
-          ),
-          children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.example.streamix',
-            ),
-            if (_senderPosition != null)
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: _senderPosition!,
-                    width: 80,
-                    height: 80,
-                    child: Icon(
-                      Icons.location_on,
-                      color: Theme.of(context).primaryColor,
-                      size: 40,
-                    ),
-                  ),
-                ],
-              ),
-            if (_senderPosition == null)
-              Center(
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.6),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text(
-                    'Waiting for sender to start sharing...',
-                    style: TextStyle(color: Colors.white, fontSize: 16),
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
+    return Center(
+      child: _controller.value.isInitialized
+          ? AspectRatio(aspectRatio: _controller.value.aspectRatio, child: VideoPlayer(_controller))
+          : const CircularProgressIndicator(),
     );
   }
 }
