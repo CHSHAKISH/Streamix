@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 class LocationService {
   final _supabase = Supabase.instance.client;
+  final Location _location = Location();
 
   /// Sends the sender's location to the 'live_sessions' table.
   Future<void> updateSenderLocation(String ticketId, LocationData location) async {
@@ -17,23 +18,46 @@ class LocationService {
     }
   }
 
-  /// --- THIS IS THE CORRECTED FUNCTION ---
+  /// Enable Background Mode with Notification (The Fix)
+  Future<void> enableBackgroundMode() async {
+    try {
+      // Essential for Android to keep the service alive in background
+      await _location.enableBackgroundMode(enable: true);
+
+      // Configure the persistent notification
+      await _location.changeNotificationOptions(
+        title: 'Streamix Location Sharing',
+        subtitle: 'You are sharing your location live.',
+        iconName: '@mipmap/ic_launcher', // Ensure this icon exists
+        onTapBringToFront: true,
+      );
+    } catch (e) {
+      print("Error enabling background mode: $e");
+    }
+  }
+
+  /// Disable Background Mode
+  Future<void> disableBackgroundMode() async {
+    try {
+      await _location.enableBackgroundMode(enable: false);
+    } catch (e) {
+      print("Error disabling background mode: $e");
+    }
+  }
+
   /// Gets a REALTIME stream of location data for a specific ticket.
   Stream<Map<String, dynamic>> getSessionStream(String ticketId) {
-    // Use the .stream() method to listen to changes on the table
     return _supabase
         .from('live_sessions')
-        .stream(primaryKey: ['ticket_id']) // Tell Supabase what the primary key is
-        .eq('ticket_id', ticketId) // Filter for *only* our ticket
+        .stream(primaryKey: ['ticket_id'])
+        .eq('ticket_id', ticketId)
         .map((listOfMaps) {
-      // The stream returns a List, but we only ever want the first item.
       if (listOfMaps.isEmpty) {
-        return <String, dynamic>{}; // Return an empty map if no data
+        return <String, dynamic>{};
       }
-      return listOfMaps.first; // Return the first (and only) map
+      return listOfMaps.first;
     });
   }
-  /// --- END OF CORRECTION ---
 
   /// Deletes the sender's location row from the 'live_sessions' table.
   Future<void> deleteSenderLocation(String ticketId) async {

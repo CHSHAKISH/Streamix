@@ -45,10 +45,15 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
 
-          // Show Media if Available
+          // Show Media if Available (Even if Active)
           if (mediaUrl != null && mediaUrl.isNotEmpty) {
             if (widget.serviceType.contains('camera')) {
-              return Center(child: Image.network(mediaUrl));
+              return Center(child: Image.network(mediaUrl,
+                loadingBuilder: (context, child, progress) {
+                  if (progress == null) return child;
+                  return const CircularProgressIndicator();
+                },
+              ));
             }
             if (widget.serviceType.contains('video')) {
               return _VideoPlayerWidget(videoUrl: mediaUrl);
@@ -105,7 +110,6 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
   }
 }
 
-// --- VIDEO STREAM VIEWER (With Candidate Queueing & Mute) ---
 class _VideoStreamViewer extends StatefulWidget {
   final String requestId;
   const _VideoStreamViewer({required this.requestId});
@@ -125,7 +129,7 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   bool _hasStream = false;
   bool _isMuted = false;
 
-  // --- FIX: QUEUE CANDIDATES UNTIL OFFER IS SET ---
+  // Candidate Queue
   List<RTCIceCandidate> _candidateQueue = [];
   bool _isRemoteDescriptionSet = false;
 
@@ -136,6 +140,8 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
       {'urls': 'stun:stun2.l.google.com:19302'},
       {'urls': 'stun:stun3.l.google.com:19302'},
       {'urls': 'stun:stun4.l.google.com:19302'},
+      {'urls': 'stun:stun.services.mozilla.com'},
+      {'urls': 'stun:global.stun.twilio.com:3478'},
     ],
     'sdpSemantics': 'unified-plan',
   };
@@ -172,12 +178,10 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
       _signalingService.addCandidate(widget.requestId, candidate, true);
     };
 
-    // --- 1. Listen for Offer ---
     _sessionSub = _signalingService.getSessionStream(widget.requestId).listen((doc) async {
       if (doc.exists) {
         var data = doc.data() as Map<String, dynamic>;
 
-        // Check if Offer exists and we haven't processed it yet
         if (data['offer'] != null && _peerConnection?.getRemoteDescription() == null) {
           if (mounted) setState(() => _status = "Received Offer...");
 
@@ -185,13 +189,12 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
             var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
             await _peerConnection?.setRemoteDescription(offer);
 
-            // --- FIX: FLUSH QUEUE ---
+            // Flush Queue
             _isRemoteDescriptionSet = true;
             for (var candidate in _candidateQueue) {
               await _peerConnection?.addCandidate(candidate);
             }
             _candidateQueue.clear();
-            // ------------------------
 
             var answer = await _peerConnection!.createAnswer();
             await _peerConnection?.setLocalDescription(answer);
@@ -205,7 +208,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
       }
     });
 
-    // --- 2. Listen for Candidates ---
     _candidateSub = _signalingService.getCandidateStream(widget.requestId, true).listen((snapshot) async {
       for (var change in snapshot.docChanges) {
         if (change.type == DocumentChangeType.added) {
@@ -216,7 +218,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
               data['sdpMLineIndex']
           );
 
-          // --- FIX: CHECK IF READY BEFORE ADDING ---
           if (_isRemoteDescriptionSet && _peerConnection != null) {
             await _peerConnection?.addCandidate(candidate);
           } else {
@@ -287,7 +288,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
             ),
           ),
 
-          // Mute Button
           if (_hasStream)
             Positioned(
               bottom: 30,
@@ -307,7 +307,6 @@ class _VideoStreamViewerState extends State<_VideoStreamViewer> {
   }
 }
 
-// (Keep AudioPlayerWidget, VideoPlayerWidget, LocationViewer as they were - No changes needed there)
 class _AudioPlayerWidget extends StatefulWidget {
   final String audioUrl;
   const _AudioPlayerWidget({required this.audioUrl});
@@ -330,9 +329,27 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   }
   @override
   Widget build(BuildContext context) {
-    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [IconButton.filled(icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow), iconSize: 60, onPressed: _isPlayerReady ? _togglePlayer : null, style: IconButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white)), const SizedBox(height: 20), Text(_isPlaying ? 'Playing...' : 'Tap to play audio', style: const TextStyle(fontSize: 16))]));
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          IconButton.filled(
+            icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
+            iconSize: 60,
+            onPressed: _isPlayerReady ? _togglePlayer : null,
+            style: IconButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(_isPlaying ? 'Playing...' : 'Tap to play audio', style: const TextStyle(fontSize: 16)),
+        ],
+      ),
+    );
   }
 }
+
 
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoUrl;
@@ -344,18 +361,61 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
   late Future<void> _initializeVideoPlayerFuture;
   @override
-  void initState() { super.initState(); _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl)); _initializeVideoPlayerFuture = _controller.initialize(); _controller.setLooping(true); }
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(
+      Uri.parse(widget.videoUrl),
+    );
+    _initializeVideoPlayerFuture = _controller.initialize();
+    _controller.setLooping(true);
+  }
   @override
-  void dispose() { _controller.dispose(); super.dispose(); }
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder(future: _initializeVideoPlayerFuture, builder: (context, snapshot) {
-      if (snapshot.connectionState == ConnectionState.done) { return Center(child: AspectRatio(aspectRatio: _controller.value.aspectRatio, child: Stack(alignment: Alignment.bottomCenter, children: [VideoPlayer(_controller), IconButton(iconSize: 60, color: Colors.white.withOpacity(0.8), icon: Icon(_controller.value.isPlaying ? Icons.pause : Icons.play_arrow), onPressed: () { setState(() { _controller.value.isPlaying ? _controller.pause() : _controller.play(); }); })]))); }
-      else { return const Center(child: CircularProgressIndicator()); }
-    });
+    return FutureBuilder(
+      future: _initializeVideoPlayerFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.done) {
+          return Center(
+            child: AspectRatio(
+              aspectRatio: _controller.value.aspectRatio,
+              child: Stack(
+                alignment: Alignment.bottomCenter,
+                children: [
+                  VideoPlayer(_controller),
+                  IconButton(
+                    iconSize: 60,
+                    color: Colors.white.withOpacity(0.8),
+                    icon: Icon(
+                      _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        _controller.value.isPlaying
+                            ? _controller.pause()
+                            : _controller.play();
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          );
+        } else {
+          return const Center(
+            child: CircularProgressIndicator(),
+          );
+        }
+      },
+    );
   }
 }
 
+// --- UPDATED LOCATION VIEWER ---
 class _LocationViewer extends StatefulWidget {
   final String requestId;
   const _LocationViewer({required this.requestId});
@@ -366,25 +426,67 @@ class _LocationViewerState extends State<_LocationViewer> {
   final LocationService _locationService = LocationService();
   final MapController _mapController = MapController();
   LatLng? _senderPosition;
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<Map<String, dynamic>>(
       stream: _locationService.getSessionStream(widget.requestId),
       builder: (context, snapshot) {
-        if (snapshot.hasData && snapshot.data != null) {
+        // Update position if data arrives
+        if (snapshot.hasData && snapshot.data != null && snapshot.data!.isNotEmpty) {
           var data = snapshot.data!;
           if (data['lat'] != null && data['lng'] != null) {
-            _senderPosition = LatLng(data['lat'], data['lng']);
+            // Important: Use double parsing to be safe
+            double lat = (data['lat'] as num).toDouble();
+            double lng = (data['lng'] as num).toDouble();
+            _senderPosition = LatLng(lat, lng);
+
+            // Move map to new position
+            // Note: Only move if user hasn't interacted heavily, or just force move for "Tracking" style
             _mapController.move(_senderPosition!, 16.0);
           }
         }
+
         return FlutterMap(
           mapController: _mapController,
-          options: MapOptions(initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629), initialZoom: _senderPosition == null ? 4.0 : 16.0),
+          options: MapOptions(
+            initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629), // Default India
+            initialZoom: _senderPosition == null ? 4.0 : 16.0,
+          ),
           children: [
-            TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.streamix'),
-            if (_senderPosition != null) MarkerLayer(markers: [Marker(point: _senderPosition!, width: 80, height: 80, child: Icon(Icons.location_on, color: Theme.of(context).primaryColor, size: 40))]),
-            if (_senderPosition == null) Center(child: Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), borderRadius: BorderRadius.circular(8)), child: const Text('Waiting for sender to start sharing...', style: TextStyle(color: Colors.white, fontSize: 16)))),
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.example.streamix',
+            ),
+            if (_senderPosition != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: _senderPosition!,
+                    width: 80,
+                    height: 80,
+                    child: Icon(
+                      Icons.location_on,
+                      color: Theme.of(context).primaryColor,
+                      size: 40,
+                    ),
+                  ),
+                ],
+              ),
+            if (_senderPosition == null)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text(
+                    'Waiting for sender to start sharing...',
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ),
+              ),
           ],
         );
       },
