@@ -38,6 +38,10 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
             .doc(widget.requestId)
             .snapshots(),
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(child: Text("Error: ${snapshot.error}", style: const TextStyle(color: Colors.red)));
+          }
+
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
@@ -46,26 +50,14 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
 
-          // 1. HANDLE MEDIA PLAYBACK (Photo, Video, Audio)
+          // 1. HANDLE MEDIA PLAYBACK
           if (mediaUrl != null && mediaUrl.isNotEmpty) {
-
-            // AUDIO PLAYER
             if (widget.serviceType == 'audio') {
               return _AudioPlayerWidget(audioUrl: mediaUrl);
             }
-
-            // PHOTO VIEWER
             if (widget.serviceType.contains('camera')) {
-              return Center(child: Image.network(mediaUrl,
-                errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image, color: Colors.white),
-                loadingBuilder: (context, child, progress) {
-                  if (progress == null) return child;
-                  return const CircularProgressIndicator();
-                },
-              ));
+              return Center(child: Image.network(mediaUrl));
             }
-
-            // VIDEO PLAYER (FIXED WITH CONTROLS)
             if (widget.serviceType.contains('video')) {
               return _VideoPlayerWidget(videoUrl: mediaUrl);
             }
@@ -102,7 +94,85 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
   }
 }
 
-// --- VIDEO PLAYER WITH CONTROLS ---
+// --- 1. LOCATION VIEWER ---
+class _LocationViewer extends StatefulWidget {
+  final String requestId;
+  const _LocationViewer({required this.requestId});
+  @override
+  State<_LocationViewer> createState() => _LocationViewerState();
+}
+
+class _LocationViewerState extends State<_LocationViewer> {
+  final LocationService _locationService = LocationService();
+  final MapController _mapController = MapController();
+  LatLng? _senderPosition;
+  bool _isMapReady = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: _locationService.getSessionStream(widget.requestId),
+      builder: (context, snapshot) {
+
+        String statusText = "Connecting to Signal...";
+        Color statusColor = Colors.orange;
+
+        if (snapshot.hasError) {
+          statusText = "Connection Error";
+          statusColor = Colors.red;
+        } else if (snapshot.hasData) {
+          if (snapshot.data!.isEmpty) {
+            statusText = "Waiting for update...";
+            statusColor = Colors.yellow;
+          } else {
+            var data = snapshot.data!.first;
+            if (data['lat'] != null && data['lng'] != null) {
+              _senderPosition = LatLng((data['lat'] as num).toDouble(), (data['lng'] as num).toDouble());
+              statusText = "LIVE TRACKING ACTIVE";
+              statusColor = Colors.green;
+              if (_isMapReady) _mapController.move(_senderPosition!, 16.0);
+            }
+          }
+        }
+
+        return Stack(
+          children: [
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629),
+                initialZoom: 4.0,
+                onMapReady: () { _isMapReady = true; },
+              ),
+              children: [
+                TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.streamix'),
+                if (_senderPosition != null)
+                  MarkerLayer(markers: [Marker(point: _senderPosition!, width: 80, height: 80, child: const Icon(Icons.location_on, color: Colors.red, size: 40))]),
+              ],
+            ),
+            Positioned(
+              bottom: 30, left: 20, right: 20,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(12), border: Border.all(color: statusColor)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if(_senderPosition == null) const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+                    const SizedBox(width: 10),
+                    Text(statusText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                  ],
+                ),
+              ),
+            )
+          ],
+        );
+      },
+    );
+  }
+}
+
+// --- 2. VIDEO PLAYER ---
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoUrl;
   const _VideoPlayerWidget({required this.videoUrl});
@@ -121,8 +191,8 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
       ..initialize().then((_) {
         setState(() {
           _isInitialized = true;
-          _controller.setLooping(true); // Auto-loop
-          _controller.play(); // Auto-play on load
+          _controller.setLooping(true);
+          _controller.play();
         });
       });
   }
@@ -135,9 +205,7 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (!_isInitialized) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    if (!_isInitialized) return const Center(child: CircularProgressIndicator());
 
     return Center(
       child: AspectRatio(
@@ -146,8 +214,6 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
           alignment: Alignment.bottomCenter,
           children: [
             VideoPlayer(_controller),
-
-            // Play/Pause Overlay
             GestureDetector(
               onTap: () {
                 setState(() {
@@ -155,16 +221,13 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
                 });
               },
               child: Container(
-                color: Colors.transparent, // Hitbox
+                color: Colors.transparent,
                 child: Center(
                   child: AnimatedOpacity(
                     opacity: _controller.value.isPlaying ? 0.0 : 1.0,
                     duration: const Duration(milliseconds: 300),
                     child: Container(
-                      decoration: BoxDecoration(
-                          color: Colors.black45,
-                          shape: BoxShape.circle
-                      ),
+                      decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
                       padding: const EdgeInsets.all(20),
                       child: const Icon(Icons.play_arrow, size: 60, color: Colors.white),
                     ),
@@ -172,8 +235,6 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
                 ),
               ),
             ),
-
-            // Progress Bar
             VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: Colors.red)),
           ],
         ),
@@ -182,11 +243,10 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   }
 }
 
-// --- AUDIO PLAYER WIDGET ---
+// --- 3. AUDIO PLAYER ---
 class _AudioPlayerWidget extends StatefulWidget {
   final String audioUrl;
   const _AudioPlayerWidget({required this.audioUrl});
-
   @override
   State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
 }
@@ -215,16 +275,13 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
 
   Future<void> _togglePlay() async {
     if (!_isInitialized) return;
-
     if (_isPlaying) {
       await _player.stopPlayer();
       setState(() => _isPlaying = false);
     } else {
       await _player.startPlayer(
           fromURI: widget.audioUrl,
-          whenFinished: () {
-            setState(() => _isPlaying = false);
-          }
+          whenFinished: () { setState(() => _isPlaying = false); }
       );
       setState(() => _isPlaying = true);
     }
@@ -258,63 +315,6 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
           ),
         ],
       ),
-    );
-  }
-}
-
-// --- LOCATION VIEWER ---
-class _LocationViewer extends StatefulWidget {
-  final String requestId;
-  const _LocationViewer({required this.requestId});
-  @override
-  State<_LocationViewer> createState() => _LocationViewerState();
-}
-
-class _LocationViewerState extends State<_LocationViewer> {
-  final LocationService _locationService = LocationService();
-  final MapController _mapController = MapController();
-  LatLng? _senderPosition;
-  bool _isMapReady = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<List<Map<String, dynamic>>>(
-      stream: _locationService.getSessionStream(widget.requestId),
-      builder: (context, snapshot) {
-        if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-          var data = snapshot.data!.first;
-          if (data['lat'] != null && data['lng'] != null) {
-            _senderPosition = LatLng((data['lat'] as num).toDouble(), (data['lng'] as num).toDouble());
-            if (_isMapReady) _mapController.move(_senderPosition!, 16.0);
-          }
-        }
-
-        return Stack(
-          children: [
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629),
-                initialZoom: 4.0,
-                onMapReady: () { _isMapReady = true; },
-              ),
-              children: [
-                TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.streamix'),
-                if (_senderPosition != null)
-                  MarkerLayer(markers: [Marker(point: _senderPosition!, width: 80, height: 80, child: const Icon(Icons.location_on, color: Colors.red, size: 40))]),
-              ],
-            ),
-            Positioned(
-              bottom: 30, left: 20, right: 20,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(12)),
-                child: Text(_senderPosition != null ? "Tracking Target" : "Waiting for Signal...", style: const TextStyle(color: Colors.white), textAlign: TextAlign.center),
-              ),
-            )
-          ],
-        );
-      },
     );
   }
 }

@@ -4,7 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:streamix/services/ticket_service.dart';
 
 class LocationService {
-  // 1. Singleton Factory
+  // Singleton
   static final LocationService _instance = LocationService._internal();
   factory LocationService() => _instance;
   LocationService._internal();
@@ -14,13 +14,13 @@ class LocationService {
   final TicketService _ticketService = TicketService();
 
   StreamSubscription<LocationData>? _locationSubscription;
+  Timer? _heartbeatTimer;
   bool _isSharing = false;
   String? _currentTicketId;
 
-  // Getter to check status
   bool get isSharing => _isSharing;
 
-  // --- START BACKGROUND SHARING (THIS WAS MISSING) ---
+  // --- START SHARING (Fault Tolerant) ---
   Future<void> startBackgroundSharing({
     required String ticketId,
     required DateTime endTime
@@ -29,43 +29,80 @@ class LocationService {
 
     try {
       _currentTicketId = ticketId;
+      print("🚀 [LocationService] Attempting to start for ID: $ticketId");
 
-      // Permission Check
+      // 1. Basic Permission (While using app)
       bool serviceEnabled = await _location.serviceEnabled();
       if (!serviceEnabled) {
         serviceEnabled = await _location.requestService();
-        if (!serviceEnabled) return;
+        if (!serviceEnabled) {
+          print("❌ GPS Service Disabled by User");
+          return;
+        }
       }
 
-      // Enable Background Mode
-      await _location.enableBackgroundMode(enable: true);
-      await _location.changeNotificationOptions(
-        title: 'Streamix Active',
-        subtitle: 'Sharing location...',
-        onTapBringToFront: true,
-        iconName: '@mipmap/ic_launcher',
-      );
+      PermissionStatus permission = await _location.hasPermission();
+      if (permission == PermissionStatus.denied) {
+        permission = await _location.requestPermission();
+        if (permission != PermissionStatus.granted) {
+          print("❌ Permission Denied");
+          return;
+        }
+      }
 
-      // Force First Update
-      LocationData initialLoc = await _location.getLocation();
-      await _updateSupabase(ticketId, initialLoc);
+      // 2. Try Background Mode (The "Allow all the time" part)
+      try {
+        await _location.enableBackgroundMode(enable: true);
 
-      // Start Listener
-      _locationSubscription = _location.onLocationChanged.listen((LocationData loc) async {
+        // Android Notification
+        await _location.changeNotificationOptions(
+          title: 'Streamix Location Live',
+          subtitle: 'Sharing location with User A...',
+          onTapBringToFront: true,
+          iconName: '@mipmap/ic_launcher',
+        );
+        print("✅ Background Mode Enabled");
+      } catch (e) {
+        // IF BACKGROUND FAILS, CONTINUE ANYWAY (Fallback)
+        print("⚠️ Background mode failed ($e). Running in Foreground mode.");
+      }
+
+      // 3. Update State Immediately
+      _isSharing = true;
+
+      // 4. FORCE IMMEDIATE UPLOAD
+      try {
+        LocationData initialLoc = await _location.getLocation();
+        await _updateSupabase(ticketId, initialLoc);
+        print("📍 Initial Location Uploaded: ${initialLoc.latitude}, ${initialLoc.longitude}");
+      } catch (e) {
+        print("⚠️ Could not get initial location, waiting for stream: $e");
+      }
+
+      // 5. Start Stream
+      _locationSubscription = _location.onLocationChanged.listen((LocationData loc) {
         if (DateTime.now().isAfter(endTime)) {
           stopSharing();
           return;
         }
-        await _updateSupabase(ticketId, loc);
+        _updateSupabase(ticketId, loc);
       });
 
-      // Notify User A
+      // 6. Heartbeat (Keep connection alive)
+      _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (timer) async {
+        if (!_isSharing) { timer.cancel(); return; }
+        try {
+          LocationData current = await _location.getLocation();
+          _updateSupabase(ticketId, current);
+        } catch (_) {}
+      });
+
+      // 7. Notify User A
       await _ticketService.notifySessionStarted(ticketId);
 
-      _isSharing = true;
-
     } catch (e) {
-      print("❌ [LocationService] Start Error: $e");
+      print("❌ [LocationService] CRITICAL ERROR: $e");
+      _isSharing = false; // Reset on failure
     }
   }
 
@@ -73,21 +110,22 @@ class LocationService {
   Future<void> stopSharing() async {
     await _locationSubscription?.cancel();
     _locationSubscription = null;
+    _heartbeatTimer?.cancel();
 
-    try {
-      await _location.enableBackgroundMode(enable: false);
-    } catch (_) {}
+    try { await _location.enableBackgroundMode(enable: false); } catch (_) {}
 
     if (_currentTicketId != null) {
       await _ticketService.completeRequest(_currentTicketId!);
+      // We DELETE the row so User A knows session ended
       await _supabase.from('live_sessions').delete().eq('ticket_id', _currentTicketId!);
     }
 
     _isSharing = false;
     _currentTicketId = null;
+    print("🛑 Service Stopped");
   }
 
-  // --- SUPABASE WRITE ---
+  // --- DATABASE WRITE ---
   Future<void> _updateSupabase(String ticketId, LocationData loc) async {
     try {
       await _supabase.from('live_sessions').upsert({
@@ -107,22 +145,5 @@ class LocationService {
         .from('live_sessions')
         .stream(primaryKey: ['ticket_id'])
         .eq('ticket_id', ticketId);
-  }
-
-  // Update methods for manual calls if needed
-  Future<void> updateSenderLocation(String ticketId, LocationData location) async {
-    await _updateSupabase(ticketId, location);
-  }
-
-  Future<void> enableBackgroundMode() async {
-    await _location.enableBackgroundMode(enable: true);
-  }
-
-  Future<void> disableBackgroundMode() async {
-    await _location.enableBackgroundMode(enable: false);
-  }
-
-  Future<void> deleteSenderLocation(String ticketId) async {
-    await _supabase.from('live_sessions').delete().eq('ticket_id', ticketId);
   }
 }
