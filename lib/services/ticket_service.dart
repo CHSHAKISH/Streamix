@@ -49,21 +49,21 @@ class TicketService {
             'android': {
               'priority': 'high',
               'notification': {
-                'channel_id': 'high_importance_channel',
+                'channel_id': 'high_importance_channel', // MUST MATCH RECEIVER
                 'default_sound': true,
                 'default_vibrate_timings': true,
-                'priority': 'max',
-                'visibility': 'public'
+                'visibility': 'public',
               }
             }
           }
         }),
       );
     } catch (e) {
-      print("❌ [Notification] Error: $e");
+      print("❌ Notification Error: $e");
     }
   }
 
+  // ... (Keep Auth Helpers: _getAccessToken, _getProjectId same as before) ...
   Future<String> _getAccessToken() async {
     final jsonString = await rootBundle.loadString('assets/service_account.json');
     final accountCredentials = ServiceAccountCredentials.fromJson(jsonString);
@@ -78,105 +78,43 @@ class TicketService {
     return jsonDecode(jsonString)['project_id'];
   }
 
-  // --- BUSINESS LOGIC ---
-
-  // 1. Create Request
-  Future<String> createScheduledRequest({
-    required String peerUserId,
-    required String serviceType,
-    required Timestamp startTime,
-    required Timestamp endTime,
-  }) async {
+  // ... (Keep Create/Update logic, just ensure they call _sendNotificationV1) ...
+  Future<String> createScheduledRequest({required String peerUserId, required String serviceType, required Timestamp startTime, required Timestamp endTime}) async {
     try {
       DocumentSnapshot myDoc = await _firestore.collection('users').doc(_currentUserId).get();
       String myName = (myDoc.data() as Map)['name'] ?? 'User';
 
-      DocumentReference ref = await _firestore.collection('requests').add({
-        'requesterId': _currentUserId,
-        'requesterName': myName,
-        'peerUserId': peerUserId,
-        'serviceType': serviceType,
-        'startTime': startTime,
-        'endTime': endTime,
-        'status': 'pending',
-        'createdAt': Timestamp.now(),
+      await _firestore.collection('requests').add({
+        'requesterId': _currentUserId, 'requesterName': myName, 'peerUserId': peerUserId,
+        'serviceType': serviceType, 'startTime': startTime, 'endTime': endTime,
+        'status': 'pending', 'createdAt': Timestamp.now(),
       });
 
-      await _sendNotificationV1(
-        targetUserId: peerUserId,
-        title: "New Request",
-        body: "$myName requested $serviceType",
-        type: 'request',
-      );
-
+      await _sendNotificationV1(targetUserId: peerUserId, title: "New Request", body: "$myName requested $serviceType", type: 'request');
       return "Success";
-    } catch (e) {
-      return e.toString();
-    }
+    } catch (e) { return e.toString(); }
   }
 
-  // 2. Update Status (Accept/Deny)
   Future<void> updateRequestStatus(String requestId, bool accepted) async {
     DocumentSnapshot doc = await _firestore.collection('requests').doc(requestId).get();
     String requesterId = doc['requesterId'];
-
-    DocumentSnapshot myDoc = await _firestore.collection('users').doc(_currentUserId).get();
-    String myName = (myDoc.data() as Map)['name'] ?? 'User';
-
     String status = accepted ? 'accepted' : 'denied';
     await _firestore.collection('requests').doc(requestId).update({'status': status});
 
-    await _sendNotificationV1(
-      targetUserId: requesterId,
-      title: accepted ? "Request Accepted" : "Request Denied",
-      body: "$myName has $status your request.",
-      type: 'status',
-    );
+    await _sendNotificationV1(targetUserId: requesterId, title: accepted ? "Accepted" : "Denied", body: "Your request was $status.", type: 'status');
   }
 
-  // 3. Notify Session Started (THIS WAS MISSING)
   Future<void> notifySessionStarted(String requestId) async {
     DocumentSnapshot doc = await _firestore.collection('requests').doc(requestId).get();
     String requesterId = doc['requesterId'];
-    String service = doc['serviceType'];
-
-    await _sendNotificationV1(
-      targetUserId: requesterId,
-      title: "Session Started",
-      body: "$service is live now.",
-      type: 'start',
-    );
+    await _sendNotificationV1(targetUserId: requesterId, title: "Session Started", body: "Service is active now.", type: 'start');
   }
 
-  // 4. Complete Request
-  Future<void> completeRequest(String requestId) async {
-    await _firestore.collection('requests').doc(requestId).update({'status': 'completed'});
-  }
-
-  Future<void> completeRequestWithMedia(String requestId, String mediaUrl) async {
-    await _firestore.collection('requests').doc(requestId).update({
-      'status': 'completed',
-      'mediaUrl': mediaUrl
-    });
-  }
-
-  Future<void> updateRequestMedia(String requestId, String mediaUrl) async {
-    await _firestore.collection('requests').doc(requestId).update({'mediaUrl': mediaUrl});
-  }
-
-  Future<void> deleteRequest(String requestId) async {
-    await _firestore.collection('requests').doc(requestId).delete();
-  }
-
-  // Streams
-  Stream<QuerySnapshot> getChatHistoryStream(String peerUserId) {
-    return _firestore.collection('requests').where(Filter.or(
-      Filter.and(Filter('requesterId', isEqualTo: _currentUserId), Filter('peerUserId', isEqualTo: peerUserId)),
-      Filter.and(Filter('requesterId', isEqualTo: peerUserId), Filter('peerUserId', isEqualTo: _currentUserId)),
-    )).orderBy('startTime', descending: true).snapshots();
-  }
-
-  Stream<QuerySnapshot> getIncomingRequestsStream() {
-    return _firestore.collection('requests').where('peerUserId', isEqualTo: _currentUserId).where('status', isEqualTo: 'pending').orderBy('startTime', descending: false).snapshots();
-  }
+  // ... (Keep CRUD methods) ...
+  Future<void> updateRequestMedia(String requestId, String mediaUrl) async { await _firestore.collection('requests').doc(requestId).update({'mediaUrl': mediaUrl}); }
+  Future<void> completeRequest(String requestId) async { await _firestore.collection('requests').doc(requestId).update({'status': 'completed'}); }
+  Future<void> completeRequestWithMedia(String requestId, String mediaUrl) async { await _firestore.collection('requests').doc(requestId).update({'status': 'completed', 'mediaUrl': mediaUrl}); }
+  Future<void> deleteRequest(String requestId) async { await _firestore.collection('requests').doc(requestId).delete(); }
+  Stream<QuerySnapshot> getChatHistoryStream(String peerUserId) { return _firestore.collection('requests').where(Filter.or(Filter.and(Filter('requesterId', isEqualTo: _currentUserId), Filter('peerUserId', isEqualTo: peerUserId)), Filter.and(Filter('requesterId', isEqualTo: peerUserId), Filter('peerUserId', isEqualTo: _currentUserId)))).orderBy('startTime', descending: true).snapshots(); }
+  Stream<QuerySnapshot> getIncomingRequestsStream() { return _firestore.collection('requests').where('peerUserId', isEqualTo: _currentUserId).where('status', isEqualTo: 'pending').orderBy('startTime', descending: false).snapshots(); }
 }

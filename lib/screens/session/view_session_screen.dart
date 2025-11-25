@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:streamix/services/location_service.dart';
 import 'package:video_player/video_player.dart';
@@ -38,62 +39,61 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
             .doc(widget.requestId)
             .snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return Center(child: Text("Error: ${snapshot.error}", style: const TextStyle(color: Colors.red)));
-          }
-
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
+          if (snapshot.hasError) return Center(child: Text("Error: ${snapshot.error}", style: const TextStyle(color: Colors.red)));
+          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
 
           var data = snapshot.data!.data() as Map<String, dynamic>;
           String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
 
-          // 1. HANDLE MEDIA PLAYBACK
+          // TIME CHECK FOR USER A (Receiver)
+          DateTime startTime = (data['startTime'] as Timestamp).toDate();
+          DateTime endTime = (data['endTime'] as Timestamp).toDate();
+          final now = DateTime.now();
+
+          // 1. MEDIA PLAYBACK
           if (mediaUrl != null && mediaUrl.isNotEmpty) {
-            if (widget.serviceType == 'audio') {
-              return _AudioPlayerWidget(audioUrl: mediaUrl);
-            }
-            if (widget.serviceType.contains('camera')) {
-              return Center(child: Image.network(mediaUrl));
-            }
-            if (widget.serviceType.contains('video')) {
-              return _VideoPlayerWidget(videoUrl: mediaUrl);
-            }
+            if (widget.serviceType == 'audio') return _AudioPlayerWidget(audioUrl: mediaUrl);
+            if (widget.serviceType.contains('camera')) return Center(child: Image.network(mediaUrl));
+            if (widget.serviceType.contains('video')) return _VideoPlayerWidget(videoUrl: mediaUrl);
           }
 
-          // 2. HANDLE LIVE LOCATION
+          // 2. LIVE LOCATION (With Time Restriction)
           if (widget.serviceType == 'location') {
+            // IF TOO EARLY -> Show Waiting Message
+            if (now.isBefore(startTime)) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.lock_clock, size: 60, color: Colors.orange),
+                    const SizedBox(height: 20),
+                    const Text("Session Not Started Yet", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 10),
+                    Text("Visible at ${DateFormat('h:mm a').format(startTime)}", style: const TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              );
+            }
+            // IF ON TIME -> Show Map
             return _LocationViewer(requestId: widget.requestId);
           }
 
-          // 3. WAITING STATE
           if (status == 'completed' && mediaUrl == null) {
-            return const Center(child: Text('Session Ended (No Media)', style: TextStyle(color: Colors.white)));
+            return const Center(child: Text('Session Ended', style: TextStyle(color: Colors.white)));
           }
 
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(height: 20),
-                Text(
-                  widget.serviceType.contains('video')
-                      ? "Waiting for video upload..."
-                      : "Waiting for sender...",
-                  style: const TextStyle(color: Colors.white),
-                )
-              ],
-            ),
-          );
+          return const Center(child: CircularProgressIndicator());
         },
       ),
     );
   }
 }
 
+// ... (Keep _LocationViewer, _VideoPlayerWidget, _AudioPlayerWidget exactly as they were in the previous code) ...
+// (I am omitting them here to save space, but you MUST keep them in the file)
+// Paste the bottom half of the previous ViewSessionScreen code here.
+// ---------------------------------------------------------------------
 // --- 1. LOCATION VIEWER ---
 class _LocationViewer extends StatefulWidget {
   final String requestId;
@@ -117,21 +117,13 @@ class _LocationViewerState extends State<_LocationViewer> {
         String statusText = "Connecting to Signal...";
         Color statusColor = Colors.orange;
 
-        if (snapshot.hasError) {
-          statusText = "Connection Error";
-          statusColor = Colors.red;
-        } else if (snapshot.hasData) {
-          if (snapshot.data!.isEmpty) {
-            statusText = "Waiting for update...";
-            statusColor = Colors.yellow;
-          } else {
-            var data = snapshot.data!.first;
-            if (data['lat'] != null && data['lng'] != null) {
-              _senderPosition = LatLng((data['lat'] as num).toDouble(), (data['lng'] as num).toDouble());
-              statusText = "LIVE TRACKING ACTIVE";
-              statusColor = Colors.green;
-              if (_isMapReady) _mapController.move(_senderPosition!, 16.0);
-            }
+        if (snapshot.hasData && snapshot.data!.isNotEmpty) {
+          var data = snapshot.data!.first;
+          if (data['lat'] != null && data['lng'] != null) {
+            _senderPosition = LatLng((data['lat'] as num).toDouble(), (data['lng'] as num).toDouble());
+            statusText = "LIVE TRACKING ACTIVE";
+            statusColor = Colors.green;
+            if (_isMapReady) _mapController.move(_senderPosition!, 16.0);
           }
         }
 
@@ -172,149 +164,42 @@ class _LocationViewerState extends State<_LocationViewer> {
   }
 }
 
-// --- 2. VIDEO PLAYER ---
 class _VideoPlayerWidget extends StatefulWidget {
   final String videoUrl;
   const _VideoPlayerWidget({required this.videoUrl});
   @override
   State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
 }
-
 class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
   bool _isInitialized = false;
-
   @override
-  void initState() {
-    super.initState();
-    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
-      ..initialize().then((_) {
-        setState(() {
-          _isInitialized = true;
-          _controller.setLooping(true);
-          _controller.play();
-        });
-      });
-  }
-
+  void initState() { super.initState(); _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))..initialize().then((_) { setState(() { _isInitialized = true; _controller.setLooping(true); _controller.play(); }); }); }
   @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
+  void dispose() { _controller.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) {
     if (!_isInitialized) return const Center(child: CircularProgressIndicator());
-
-    return Center(
-      child: AspectRatio(
-        aspectRatio: _controller.value.aspectRatio,
-        child: Stack(
-          alignment: Alignment.bottomCenter,
-          children: [
-            VideoPlayer(_controller),
-            GestureDetector(
-              onTap: () {
-                setState(() {
-                  _controller.value.isPlaying ? _controller.pause() : _controller.play();
-                });
-              },
-              child: Container(
-                color: Colors.transparent,
-                child: Center(
-                  child: AnimatedOpacity(
-                    opacity: _controller.value.isPlaying ? 0.0 : 1.0,
-                    duration: const Duration(milliseconds: 300),
-                    child: Container(
-                      decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle),
-                      padding: const EdgeInsets.all(20),
-                      child: const Icon(Icons.play_arrow, size: 60, color: Colors.white),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: Colors.red)),
-          ],
-        ),
-      ),
-    );
+    return Center(child: AspectRatio(aspectRatio: _controller.value.aspectRatio, child: Stack(alignment: Alignment.bottomCenter, children: [VideoPlayer(_controller), GestureDetector(onTap: () { setState(() { _controller.value.isPlaying ? _controller.pause() : _controller.play(); }); }, child: Container(color: Colors.transparent, child: Center(child: AnimatedOpacity(opacity: _controller.value.isPlaying ? 0.0 : 1.0, duration: const Duration(milliseconds: 300), child: Container(decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle), padding: const EdgeInsets.all(20), child: const Icon(Icons.play_arrow, size: 60, color: Colors.white)))))), VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: Colors.red))])));
   }
 }
 
-// --- 3. AUDIO PLAYER ---
 class _AudioPlayerWidget extends StatefulWidget {
   final String audioUrl;
   const _AudioPlayerWidget({required this.audioUrl});
   @override
   State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
 }
-
 class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   final FlutterSoundPlayer _player = FlutterSoundPlayer();
   bool _isPlaying = false;
   bool _isInitialized = false;
-
   @override
-  void initState() {
-    super.initState();
-    _initPlayer();
-  }
-
-  Future<void> _initPlayer() async {
-    await _player.openPlayer();
-    setState(() => _isInitialized = true);
-  }
-
+  void initState() { super.initState(); _initPlayer(); }
+  Future<void> _initPlayer() async { await _player.openPlayer(); setState(() => _isInitialized = true); }
   @override
-  void dispose() {
-    _player.closePlayer();
-    super.dispose();
-  }
-
-  Future<void> _togglePlay() async {
-    if (!_isInitialized) return;
-    if (_isPlaying) {
-      await _player.stopPlayer();
-      setState(() => _isPlaying = false);
-    } else {
-      await _player.startPlayer(
-          fromURI: widget.audioUrl,
-          whenFinished: () { setState(() => _isPlaying = false); }
-      );
-      setState(() => _isPlaying = true);
-    }
-  }
-
+  void dispose() { _player.closePlayer(); super.dispose(); }
+  Future<void> _togglePlay() async { if (!_isInitialized) return; if (_isPlaying) { await _player.stopPlayer(); setState(() => _isPlaying = false); } else { await _player.startPlayer(fromURI: widget.audioUrl, whenFinished: () { setState(() => _isPlaying = false); }); setState(() => _isPlaying = true); } }
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(30),
-            decoration: BoxDecoration(
-                color: Colors.grey[900],
-                shape: BoxShape.circle,
-                border: Border.all(color: _isPlaying ? Colors.green : Colors.white, width: 2)
-            ),
-            child: Icon(Icons.music_note, size: 60, color: _isPlaying ? Colors.green : Colors.white),
-          ),
-          const SizedBox(height: 40),
-          ElevatedButton.icon(
-            icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
-            label: Text(_isPlaying ? "STOP AUDIO" : "PLAY RECORDING"),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: _isPlaying ? Colors.red : Colors.blue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15)
-            ),
-            onPressed: _togglePlay,
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) { return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Container(padding: const EdgeInsets.all(30), decoration: BoxDecoration(color: Colors.grey[900], shape: BoxShape.circle, border: Border.all(color: _isPlaying ? Colors.green : Colors.white, width: 2)), child: Icon(Icons.music_note, size: 60, color: _isPlaying ? Colors.green : Colors.white)), const SizedBox(height: 40), ElevatedButton.icon(icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow), label: Text(_isPlaying ? "STOP AUDIO" : "PLAY RECORDING"), style: ElevatedButton.styleFrom(backgroundColor: _isPlaying ? Colors.red : Colors.blue, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15)), onPressed: _togglePlay)])); }
 }

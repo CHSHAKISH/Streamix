@@ -1,72 +1,92 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter/material.dart';
+import 'package:streamix/main.dart'; // Needed for navigatorKey
 import 'package:streamix/screens/requests/requests_list_screen.dart';
 
 class NotificationService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
+  // Local Notifications Plugin
+  final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+
+  // Define the Channel
+  final AndroidNotificationChannel _androidChannel = const AndroidNotificationChannel(
+    'high_importance_channel', // id
+    'High Importance Notifications', // title
+    description: 'This channel is used for important notifications.',
+    importance: Importance.max, // <--- MAKES IT POP UP
+    playSound: true,
+    enableVibration: true,
+  );
+
   Future<void> initNotifications() async {
-    try {
-      // 1. Request Permission
-      NotificationSettings settings = await _firebaseMessaging.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
+    // 1. Request Permissions
+    await _firebaseMessaging.requestPermission(alert: true, badge: true, sound: true);
 
-      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-        print('✅ [Notification] Permission granted');
+    // 2. Create Channel on Android
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(_androidChannel);
 
-        // 2. Get Token
-        String? token = await _firebaseMessaging.getToken();
-        if (token != null) {
-          print('✅ [Notification] Token generated: $token');
-          await _saveTokenToFirestore(token);
-        } else {
-          print('❌ [Notification] Failed to generate FCM token');
-        }
+    // 3. Initialize Local Plugin
+    const AndroidInitializationSettings androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const InitializationSettings initSettings = InitializationSettings(android: androidSettings);
 
-        // 3. Listen for Refresh
-        _firebaseMessaging.onTokenRefresh.listen((newToken) {
-          print('🔄 [Notification] Token refreshed: $newToken');
-          _saveTokenToFirestore(newToken);
-        });
+    await _localNotifications.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        _handleNavigation();
+      },
+    );
 
-        // 4. Foreground Listener
-        FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-          print('🔔 Foreground Message: ${message.notification?.title}');
-        });
-      } else {
-        print('❌ [Notification] User declined permission');
+    // 4. Save Token
+    String? token = await _firebaseMessaging.getToken();
+    if (token != null) _saveTokenToFirestore(token);
+    _firebaseMessaging.onTokenRefresh.listen(_saveTokenToFirestore);
+
+    // 5. Foreground Listener (Show banner when app is open)
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      RemoteNotification? notification = message.notification;
+      AndroidNotification? android = message.notification?.android;
+
+      if (notification != null && android != null) {
+        _localNotifications.show(
+          notification.hashCode,
+          notification.title,
+          notification.body,
+          NotificationDetails(
+            android: AndroidNotificationDetails(
+              _androidChannel.id,
+              _androidChannel.name,
+              channelDescription: _androidChannel.description,
+              icon: '@mipmap/ic_launcher',
+              importance: Importance.max, // POP UP
+              priority: Priority.high,    // POP UP
+              playSound: true,
+            ),
+          ),
+        );
       }
-    } catch (e) {
-      print('❌ [Notification] Error in initNotifications: $e');
-    }
+    });
   }
 
-  // Handle Taps
+  // Background Taps
   Future<void> setupInteractedMessage(GlobalKey<NavigatorState> navigatorKey) async {
-    try {
-      RemoteMessage? initialMessage = await _firebaseMessaging.getInitialMessage();
-      if (initialMessage != null) {
-        _handleMessage(initialMessage, navigatorKey);
-      }
+    RemoteMessage? initialMessage = await _firebaseMessaging.getInitialMessage();
+    if (initialMessage != null) _handleNavigation();
 
-      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        _handleMessage(message, navigatorKey);
-      });
-    } catch (e) {
-      print('❌ [Notification] Error in setupInteractedMessage: $e');
-    }
+    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      _handleNavigation();
+    });
   }
 
-  void _handleMessage(RemoteMessage message, GlobalKey<NavigatorState> navigatorKey) {
-    if (message.data['click_action'] == 'FLUTTER_NOTIFICATION_CLICK') {
-      print("🚀 [Notification] Navigating to Requests List");
-      navigatorKey.currentState?.push(
+  void _handleNavigation() {
+    if (navigatorKey.currentState != null) {
+      navigatorKey.currentState!.push(
         MaterialPageRoute(builder: (_) => const RequestsListScreen()),
       );
     }
@@ -74,19 +94,11 @@ class NotificationService {
 
   Future<void> _saveTokenToFirestore(String token) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      print("⚠️ [Notification] User not logged in, cannot save token yet.");
-      return;
-    }
-
-    try {
+    if (user != null) {
       await _firestore.collection('users').doc(user.uid).set({
         'fcmToken': token,
         'lastTokenUpdate': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      print("✅ [Notification] Token saved for user ${user.uid}");
-    } catch (e) {
-      print("❌ [Notification] Error saving token to Firestore: $e");
     }
   }
 }
