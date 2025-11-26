@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:streamix/screens/session/active_session_screen.dart'; // Camera
 import 'package:streamix/screens/session/audio_session_screen.dart';  // Audio
 import 'package:streamix/screens/session/video_session_screen.dart';  // Video
+// REMOVED STREAM IMPORT
 import 'package:streamix/services/location_service.dart';             // Location
 import 'package:streamix/services/ticket_service.dart';
 
@@ -19,15 +20,13 @@ class RequestsListScreen extends StatefulWidget {
 
 class _RequestsListScreenState extends State<RequestsListScreen> {
   final TicketService _ticketService = TicketService();
-  final LocationService _locationService = LocationService(); // Singleton
+  final LocationService _locationService = LocationService();
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
-
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
-    // Refresh UI every second to keep status accurate
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) setState(() {});
     });
@@ -39,23 +38,26 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
     super.dispose();
   }
 
-  void _openSession(String requestId, String service) {
+  void _openSession(String requestId, String service, DateTime start, DateTime end) {
     if (service == 'audio') {
       Navigator.push(context, MaterialPageRoute(builder: (_) => AudioSessionScreen(requestId: requestId)));
     } else if (service.contains('video')) {
       Navigator.push(context, MaterialPageRoute(builder: (_) => VideoSessionScreen(requestId: requestId, serviceType: service)));
     } else if (service.contains('camera')) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(requestId: requestId, serviceType: service)));
+      // Route to Standard Camera Session (No Remote Trigger)
+      Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(
+          requestId: requestId,
+          serviceType: service,
+          scheduledStartTime: start,
+          scheduledEndTime: end
+      )));
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
-          .collection('requests')
-          .where('peerUserId', isEqualTo: _currentUserId)
-          .snapshots(),
+      stream: FirebaseFirestore.instance.collection('requests').where('peerUserId', isEqualTo: _currentUserId).snapshots(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
@@ -68,9 +70,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
 
         return Scaffold(
           appBar: AppBar(title: const Text('My Requests')),
-          body: requests.isEmpty
-              ? const Center(child: Text('No requests.'))
-              : ListView.builder(
+          body: requests.isEmpty ? const Center(child: Text('No requests.')) : ListView.builder(
               itemCount: requests.length,
               itemBuilder: (context, index) {
                 var data = requests[index].data() as Map<String, dynamic>;
@@ -88,6 +88,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                 bool isAccepted = status == 'accepted';
                 bool isCompleted = status == 'completed';
                 bool isExpired = now.isAfter(endTime);
+                bool isTimeWindowOpen = !now.isBefore(startTime) && !isExpired;
 
                 bool isLocation = service == 'location';
                 bool isMedia = !isLocation;
@@ -103,58 +104,27 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Text(requester, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                            Text(status.toUpperCase(), style: TextStyle(
-                                color: isCompleted ? Colors.blue : (isAccepted ? Colors.green : Colors.orange),
-                                fontWeight: FontWeight.bold, fontSize: 12
-                            )),
+                            Text(status.toUpperCase(), style: TextStyle(color: isAccepted ? Colors.green : Colors.grey, fontWeight: FontWeight.bold)),
                           ],
                         ),
                         Text("${service.toUpperCase()}  •  $dateStr"),
                         const SizedBox(height: 10),
 
-                        // --- 1. PENDING BUTTONS ---
                         if (isPending && !isExpired)
                           Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              OutlinedButton(
-                                onPressed: () => _ticketService.updateRequestStatus(requestId, false),
-                                child: const Text("Deny"),
-                              ),
+                              OutlinedButton(onPressed: () => _ticketService.updateRequestStatus(requestId, false), child: const Text("Deny")),
                               const SizedBox(width: 12),
                               ElevatedButton(
                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                                 onPressed: () async {
-                                  // A. Permission Check
-                                  if (isLocation) {
-                                    var s = await Permission.location.request();
-                                    if (s.isDenied) {
-                                      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Location Permission Denied")));
-                                      return;
-                                    }
-                                  } else {
-                                    var perms = <Permission>[];
-                                    if (service.contains('camera') || service.contains('video')) perms.add(Permission.camera);
-                                    if (service == 'audio' || service.contains('video')) perms.add(Permission.microphone);
-                                    Map<Permission, PermissionStatus> statuses = await perms.request();
-                                    if (statuses.values.any((s) => s.isDenied)) return;
-                                  }
+                                  if (isLocation) await Permission.location.request();
+                                  else await Permission.camera.request();
 
-                                  // B. Accept in Database
                                   await _ticketService.updateRequestStatus(requestId, true);
-
-                                  // C. FORCE START (No Time Check for Sender)
-                                  if (isLocation) {
-                                    // Start IMMEDIATELY regardless of time
-                                    await _locationService.startBackgroundSharing(ticketId: requestId, endTime: endTime);
-
-                                    if(mounted) {
-                                      setState((){}); // Force UI to show "Stop" button
-                                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Location sharing started!")));
-                                    }
-                                  } else {
-                                    // Media
-                                    if(mounted) _openSession(requestId, service);
+                                  if (isLocation && isTimeWindowOpen) {
+                                    _locationService.startBackgroundSharing(ticketId: requestId, endTime: endTime);
                                   }
                                 },
                                 child: const Text("ACCEPT"),
@@ -162,62 +132,30 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                             ],
                           ),
 
-                        // --- 2. LOCATION CONTROLS ---
                         if (isLocation && isAccepted && !isExpired)
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              // Status Indicator
-                              Row(
-                                children: [
-                                  Icon(Icons.circle, size: 12, color: _locationService.isSharing ? Colors.red : Colors.grey),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                      _locationService.isSharing ? "SHARING LIVE" : "Ready",
-                                      style: TextStyle(
-                                          color: _locationService.isSharing ? Colors.red : Colors.grey,
-                                          fontWeight: FontWeight.bold
-                                      )
-                                  ),
-                                ],
-                              ),
-
-                              // Only show Stop (since it auto-starts)
+                              Text(_locationService.isSharing ? "SHARING LIVE" : (isTimeWindowOpen ? "Ready" : "Scheduled"), style: TextStyle(color: _locationService.isSharing ? Colors.red : Colors.grey)),
                               if (_locationService.isSharing)
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.stop_circle_outlined),
-                                  label: const Text("Stop"),
-                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                                  onPressed: () async {
-                                    await _locationService.stopSharing();
-                                    if(mounted) setState((){});
-                                  },
-                                )
-                              else
-                              // Fallback Resume button (Only if app crashed/restarted)
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.play_arrow),
-                                  label: const Text("Resume"),
-                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                                  onPressed: () async {
-                                    await _locationService.startBackgroundSharing(ticketId: requestId, endTime: endTime);
-                                    if(mounted) setState((){});
-                                  },
-                                )
+                                ElevatedButton.icon(icon: const Icon(Icons.stop), label: const Text("Stop"), style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white), onPressed: () async { await _locationService.stopSharing(); setState((){}); })
+                              else if (isTimeWindowOpen)
+                                ElevatedButton.icon(icon: const Icon(Icons.play_arrow), label: const Text("Resume"), style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white), onPressed: () async { await _locationService.startBackgroundSharing(ticketId: requestId, endTime: endTime); setState((){}); })
                             ],
                           ),
 
-                        // --- 3. MEDIA RETRY ---
-                        if (isMedia && isCompleted && !isExpired)
+                        if (isMedia && (isAccepted || isCompleted) && isTimeWindowOpen)
                           Align(
                             alignment: Alignment.centerRight,
                             child: ElevatedButton.icon(
-                              icon: const Icon(Icons.refresh),
-                              label: const Text("CLICK AGAIN"),
+                              icon: const Icon(Icons.videocam),
+                              label: const Text("OPEN SESSION"),
                               style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
-                              onPressed: () => _openSession(requestId, service),
+                              onPressed: () => _openSession(requestId, service, startTime, endTime),
                             ),
-                          )
+                          ),
+
+                        if (isExpired) const Align(alignment: Alignment.centerRight, child: Text("Expired", style: TextStyle(color: Colors.red))),
                       ],
                     ),
                   ),

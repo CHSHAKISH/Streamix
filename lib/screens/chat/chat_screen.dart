@@ -145,6 +145,10 @@ class _ChatScreenState extends State<ChatScreen> {
       statusIcon = Icons.task_alt;
       statusColor = isMe ? Colors.white70 : Colors.grey[700]!;
     }
+    if (status == 'stopped_by_provider') {
+      statusIcon = Icons.block;
+      statusColor = isMe ? Colors.white70 : Colors.orange.shade700;
+    }
 
     String title = isMe ? 'You requested $service' : '${data['requesterName']} requested $service';
 
@@ -198,19 +202,21 @@ class _ChatScreenState extends State<ChatScreen> {
               Icon(statusIcon, color: statusColor, size: 16),
               const SizedBox(width: 4),
               Text(
-                'Status: $status',
+                status == 'stopped_by_provider' 
+                    ? 'Status: Stopped by User B' 
+                    : 'Status: $status',
                 style: TextStyle(fontStyle: FontStyle.italic, color: statusColor, fontWeight: FontWeight.w600),
               ),
             ],
           ),
 
-          if ((status == 'accepted' || status == 'completed') && isMe)
+          if ((status == 'accepted' || status == 'completed') && isMe && status != 'stopped_by_provider')
             Padding(
               padding: const EdgeInsets.only(top: 10.0),
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.remove_red_eye_outlined, size: 18),
                 label: const Text('View Live / File'),
-                onPressed: () {
+                onPressed: () async {
                   final now = DateTime.now();
 
                   // --- FIX 3 & 4: Block access after end time ---
@@ -234,6 +240,94 @@ class _ChatScreenState extends State<ChatScreen> {
                     return;
                   }
 
+                  // For camera services, trigger capture and wait for photo
+                  if (service.contains('camera')) {
+                    // Show loading dialog
+                    if (context.mounted) {
+                      showDialog(
+                        context: context,
+                        barrierDismissible: false,
+                        builder: (dialogContext) => AlertDialog(
+                          backgroundColor: Colors.grey[900],
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const CircularProgressIndicator(color: Colors.white),
+                              const SizedBox(height: 20),
+                              const Text(
+                                '📸 Capturing photo from User B...',
+                                style: TextStyle(color: Colors.white),
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+                    
+                    // Trigger the capture
+                    await _ticketService.sendCameraTrigger(requestId);
+                    
+                    // Wait for photo to be uploaded (listen to Firestore)
+                    bool photoReady = false;
+                    String? photoUrl;
+                    
+                    final subscription = FirebaseFirestore.instance
+                        .collection('requests')
+                        .doc(requestId)
+                        .snapshots()
+                        .listen((snapshot) {
+                      if (snapshot.exists) {
+                        final data = snapshot.data();
+                        final command = data?['remoteCommand'] as String?;
+                        final url = data?['mediaUrl'] as String?;
+                        
+                        if (command == 'COMPLETED' && url != null && url.isNotEmpty) {
+                          photoReady = true;
+                          photoUrl = url;
+                        }
+                      }
+                    });
+                    
+                    // Wait up to 10 seconds for photo
+                    int waitCount = 0;
+                    while (!photoReady && waitCount < 20) { // 20 x 500ms = 10 seconds
+                      await Future.delayed(const Duration(milliseconds: 500));
+                      waitCount++;
+                    }
+                    
+                    // Cancel subscription
+                    await subscription.cancel();
+                    
+                    // Close loading dialog
+                    if (context.mounted) {
+                      Navigator.of(context, rootNavigator: true).pop();
+                    }
+                    
+                    // Open viewer if photo is ready
+                    if (photoReady && photoUrl != null && context.mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ViewSessionScreen(
+                            requestId: requestId,
+                            serviceType: data['serviceType'],
+                          ),
+                        ),
+                      );
+                    } else if (context.mounted) {
+                      // Show error if timeout
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('⚠️ Photo capture timeout. User B may not be available.'),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                    return;
+                  }
+
+                  // For other services
                   if (status == 'completed' || (mediaUrl != null && mediaUrl.isNotEmpty)) {
                     Navigator.push(
                       context,

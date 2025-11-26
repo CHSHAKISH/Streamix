@@ -1,21 +1,19 @@
 import 'dart:async';
-import 'dart:io';
-import 'package:camera/camera.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:streamix/services/supabase_storage_service.dart';
-import 'package:streamix/services/ticket_service.dart';
-import 'package:flutter_sound/flutter_sound.dart';
-import 'package:path_provider/path_provider.dart';
 
 class ActiveSessionScreen extends StatefulWidget {
   final String requestId;
-  final String serviceType; // 'front_camera', 'back_camera', or 'audio'
+  final String serviceType; // 'front_camera' or 'back_camera'
+  final DateTime scheduledStartTime;
+  final DateTime scheduledEndTime;
 
   const ActiveSessionScreen({
     super.key,
     required this.requestId,
     required this.serviceType,
+    required this.scheduledStartTime,
+    required this.scheduledEndTime,
   });
 
   @override
@@ -23,188 +21,63 @@ class ActiveSessionScreen extends StatefulWidget {
 }
 
 class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
-  final TicketService _ticketService = TicketService();
-  final SupabaseStorageService _supabaseStorage = SupabaseStorageService();
+  // State Variables
+  String _statusMessage = "Checking Schedule...";
 
-  // Audio Controller
-  final FlutterSoundRecorder _audioRecorder = FlutterSoundRecorder();
-
-  // Camera Controller
-  CameraController? _cameraController;
-
-  // State
-  bool _isInitialized = false;
-  bool _isUploading = false;
-  String _statusMessage = "Initializing...";
-  int _countdown = 0;
+  // Timers
+  Timer? _scheduleTimer;
 
   @override
   void initState() {
     super.initState();
-    _routeService();
+    _checkSchedule();
   }
 
   @override
   void dispose() {
-    _cameraController?.dispose();
-    _audioRecorder.closeRecorder();
+    _scheduleTimer?.cancel();
     super.dispose();
   }
 
-  void _routeService() {
-    if (widget.serviceType == 'audio') {
-      _startAudioSequence();
-    } else if (widget.serviceType.contains('camera')) {
-      _startCameraSequence();
-    }
-  }
+  // --- 1. SCHEDULE LOGIC ---
+  void _checkSchedule() {
+    final now = DateTime.now();
 
-  // =========================================================
-  // 🎙️ AUDIO LOGIC (Auto Record 10s)
-  // =========================================================
-  Future<void> _startAudioSequence() async {
-    var status = await Permission.microphone.request();
-    if (status.isDenied) {
-      setState(() => _statusMessage = "Microphone Permission Denied");
-      return;
-    }
-
-    try {
-      await _audioRecorder.openRecorder();
-      if (!mounted) return;
-
+    // A. Too Early -> Wait
+    if (now.isBefore(widget.scheduledStartTime)) {
+      final waitDuration = widget.scheduledStartTime.difference(now);
       setState(() {
-        _isInitialized = true;
-        _statusMessage = "Recording... 10s";
-        _countdown = 10;
+        _statusMessage = "Auto-start in ${waitDuration.inMinutes}:${(waitDuration.inSeconds % 60).toString().padLeft(2, '0')}";
       });
 
-      // Start Recording
-      final tempDir = await getTemporaryDirectory();
-      final path = '${tempDir.path}/${widget.requestId}.aac';
-
-      await _audioRecorder.startRecorder(toFile: path);
-
-      // 10 Second Countdown
-      Timer.periodic(const Duration(seconds: 1), (timer) async {
-        if (!mounted) {
+      // Update countdown every second until start time
+      _scheduleTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        final timeLeft = widget.scheduledStartTime.difference(DateTime.now());
+        if (timeLeft.isNegative) {
           timer.cancel();
-          return;
-        }
-
-        setState(() {
-          _countdown--;
-          _statusMessage = "Recording... ${_countdown}s";
-        });
-
-        if (_countdown <= 0) {
-          timer.cancel();
-          await _stopAudioAndUpload(path);
-        }
-      });
-
-    } catch (e) {
-      setState(() => _statusMessage = "Audio Error: $e");
-    }
-  }
-
-  Future<void> _stopAudioAndUpload(String path) async {
-    await _audioRecorder.stopRecorder();
-
-    setState(() {
-      _isUploading = true;
-      _statusMessage = "Uploading Audio...";
-    });
-
-    String? url = await _supabaseStorage.uploadRequestMedia(widget.requestId, File(path), 'aac');
-    _finishSession(url);
-  }
-
-  // =========================================================
-  // 📸 CAMERA LOGIC (Reverted to Working Version)
-  // =========================================================
-  Future<void> _startCameraSequence() async {
-    var status = await Permission.camera.request();
-    if (status.isDenied) {
-      setState(() => _statusMessage = "Camera Permission Denied");
-      return;
-    }
-
-    try {
-      final cameras = await availableCameras();
-      final isFront = widget.serviceType.contains('front');
-      final camera = cameras.firstWhere(
-            (c) => c.lensDirection == (isFront ? CameraLensDirection.front : CameraLensDirection.back),
-        orElse: () => cameras.first,
-      );
-
-      _cameraController = CameraController(camera, ResolutionPreset.high, enableAudio: false);
-      await _cameraController!.initialize();
-
-      if (!mounted) return;
-      setState(() {
-        _isInitialized = true;
-        _countdown = 3;
-        _statusMessage = "Capturing in $_countdown...";
-      });
-
-      // 3-2-1 Countdown
-      Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (!mounted) {
-          timer.cancel();
-          return;
-        }
-        if (_countdown > 1) {
           setState(() {
-            _countdown--;
-            _statusMessage = "Capturing in $_countdown...";
+            _statusMessage = "Camera Ready for Remote Capture";
           });
         } else {
-          timer.cancel();
-          _takePictureAndUpload();
+          if (mounted) {
+            setState(() {
+              _statusMessage = "Auto-start in ${timeLeft.inHours}:${(timeLeft.inMinutes % 60).toString().padLeft(2, '0')}:${(timeLeft.inSeconds % 60).toString().padLeft(2, '0')}";
+            });
+          }
         }
       });
-
-    } catch (e) {
-      setState(() => _statusMessage = "Camera Error: $e");
     }
-  }
-
-  Future<void> _takePictureAndUpload() async {
-    if (_cameraController == null) return;
-
-    try {
-      setState(() => _statusMessage = "Capturing...");
-      final XFile image = await _cameraController!.takePicture();
-
-      setState(() {
-        _isUploading = true;
-        _statusMessage = "Uploading Photo...";
-      });
-
-      String? url = await _supabaseStorage.uploadRequestMedia(widget.requestId, File(image.path), 'jpg');
-      _finishSession(url);
-
-    } catch (e) {
-      setState(() => _statusMessage = "Capture Error: $e");
-    }
-  }
-
-  // =========================================================
-  // 🏁 COMMON FINISH LOGIC
-  // =========================================================
-  Future<void> _finishSession(String? url) async {
-    if (url != null) {
-      await _ticketService.completeRequestWithMedia(widget.requestId, url);
-
+    // B. Too Late -> Expire
+    else if (now.isAfter(widget.scheduledEndTime)) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Sent Successfully!")));
-        Navigator.pop(context); // AUTO CLOSE
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Session Expired")));
+        Navigator.pop(context);
       }
-    } else {
+    }
+    // C. On Time -> Show standby message for camera services
+    else {
       setState(() {
-        _isUploading = false;
-        _statusMessage = "Upload Failed.";
+        _statusMessage = "Camera Ready for Remote Capture";
       });
     }
   }
@@ -213,73 +86,147 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
-        children: [
-          // 1. BACKGROUND CONTENT
-          if (widget.serviceType.contains('camera'))
-            if (_isInitialized && _cameraController != null)
-              Center(child: CameraPreview(_cameraController!))
-            else
-              const Center(child: CircularProgressIndicator(color: Colors.white))
-          else
-          // AUDIO UI
-            Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.mic, size: 100, color: Colors.redAccent),
-                  const SizedBox(height: 20),
-                  if (_isInitialized)
-                    const SizedBox(width: 200, child: LinearProgressIndicator(color: Colors.red)),
-                ],
-              ),
-            ),
+      appBar: AppBar(
+        title: Text('${widget.serviceType.toUpperCase()} Session'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+      ),
+      body: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection('requests')
+            .doc(widget.requestId)
+            .snapshots(),
+        builder: (context, snapshot) {
+          String? mediaUrl;
+          String remoteCommand = 'IDLE';
+          
+          if (snapshot.hasData) {
+            var data = snapshot.data!.data() as Map<String, dynamic>?;
+            if (data != null) {
+              mediaUrl = data['mediaUrl'];
+              remoteCommand = data['remoteCommand'] ?? 'IDLE';
+            }
+          }
 
-          // 2. OVERLAY
-          Container(color: Colors.black45),
+          bool photoExists = mediaUrl != null && mediaUrl.isNotEmpty;
+          bool isProcessing = remoteCommand == 'REQUEST_CAPTURE';
 
-          // 3. STATUS TEXT & COUNTDOWN
-          Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                if (_countdown > 0)
-                  Text(
-                    "$_countdown",
-                    style: const TextStyle(fontSize: 100, color: Colors.white, fontWeight: FontWeight.bold),
-                  ),
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              // BLACK BACKGROUND
+              Container(color: Colors.black),
 
-                const SizedBox(height: 50),
-
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
-                  child: Text(
-                    _statusMessage,
-                    style: const TextStyle(color: Colors.white, fontSize: 18),
+              // CENTER: MESSAGES & STATUS
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Processing Indicator
+                      if (isProcessing) ...[
+                        const CircularProgressIndicator(color: Colors.white),
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Text(
+                            "User A viewing file\nTaking photo automatically...",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ]
+                      // Success State
+                      else if (photoExists) ...[
+                        const Icon(Icons.check_circle, color: Colors.green, size: 60),
+                        const SizedBox(height: 10),
+                        const Text("Photo Sent!", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Text(
+                            "Photo sent successfully!\n\nCamera still active.\nUser A can view again anytime.\n\nTap STOP SHARING to end.",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white70, fontSize: 16),
+                          ),
+                        ),
+                      ]
+                      // Standby State
+                      else ...[
+                        const Icon(Icons.camera_alt, color: Colors.white70, size: 60),
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            "📷 Camera Ready\n\n$_statusMessage\n\nKeep this app open.\nWhen User A clicks VIEW FILE,\nphoto will be taken automatically.",
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                      
+                      const SizedBox(height: 40),
+                      
+                      // Stop Sharing Button
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.stop_circle),
+                        label: const Text("STOP SHARING"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                          textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        onPressed: () async {
+                          // Mark request as completed and notify User A
+                          await FirebaseFirestore.instance
+                              .collection('requests')
+                              .doc(widget.requestId)
+                              .update({
+                            'status': 'stopped_by_provider',
+                            'remoteCommand': 'STOPPED',
+                            'lastUpdated': FieldValue.serverTimestamp(),
+                          });
+                          
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('✅ Stopped sharing camera'),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                            Navigator.pop(context);
+                          }
+                        },
+                      ),
+                      
+                      const SizedBox(height: 10),
+                      
+                      // Close Button
+                      TextButton(
+                        child: const Text("Close & Exit", style: TextStyle(color: Colors.grey, fontSize: 16)),
+                        onPressed: () => Navigator.pop(context),
+                      )
+                    ],
                   ),
                 ),
-
-                if (_isUploading)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 20.0),
-                    child: CircularProgressIndicator(color: Colors.white),
-                  )
-              ],
-            ),
-          ),
-
-          // 4. CLOSE BUTTON (Top Left)
-          SafeArea(
-            child: Positioned(
-              left: 10, top: 10,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: Colors.white, size: 30),
-                onPressed: () => Navigator.pop(context),
               ),
-            ),
-          )
-        ],
+            ],
+          );
+        },
       ),
     );
   }

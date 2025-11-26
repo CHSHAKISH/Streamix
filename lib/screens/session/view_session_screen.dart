@@ -1,8 +1,6 @@
-import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:streamix/services/location_service.dart';
 import 'package:video_player/video_player.dart';
@@ -15,7 +13,7 @@ class ViewSessionScreen extends StatefulWidget {
   const ViewSessionScreen({
     super.key,
     required this.requestId,
-    required this.serviceType
+    required this.serviceType,
   });
 
   @override
@@ -29,7 +27,7 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
-        title: Text('Viewing: ${widget.serviceType.toUpperCase()}'),
+        title: Text('Monitor: ${widget.serviceType.toUpperCase()}'),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
       ),
@@ -39,62 +37,178 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
             .doc(widget.requestId)
             .snapshots(),
         builder: (context, snapshot) {
-          if (snapshot.hasError) return Center(child: Text("Error: ${snapshot.error}", style: const TextStyle(color: Colors.red)));
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          if (!snapshot.hasData)
+            return const Center(child: CircularProgressIndicator());
 
           var data = snapshot.data!.data() as Map<String, dynamic>;
-          String status = data['status'];
           String? mediaUrl = data['mediaUrl'];
+          String command = data['remoteCommand'] ?? 'IDLE';
+          String status = data['status'] ?? '';
+          
+          print('🔍 [ViewSession] mediaUrl: $mediaUrl');
+          print('🔍 [ViewSession] command: $command');
+          print('🔍 [ViewSession] status: $status');
+          
+          // Check if User B stopped sharing
+          if (status == 'stopped_by_provider' || command == 'STOPPED') {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('⚠️ User B has stopped sharing the camera'),
+                    backgroundColor: Colors.orange,
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+                Navigator.pop(context);
+              }
+            });
+          }
 
-          // TIME CHECK FOR USER A (Receiver)
-          DateTime startTime = (data['startTime'] as Timestamp).toDate();
-          DateTime endTime = (data['endTime'] as Timestamp).toDate();
-          final now = DateTime.now();
+          // 1. REMOTE CAMERA
+          if (widget.serviceType.contains('camera')) {
+            return Container(
+              color: Colors.black,
+              child: Stack(
+                children: [
+                  // Fullscreen Image Display
+                  Center(
+                    child: mediaUrl != null && mediaUrl.isNotEmpty
+                        ? InteractiveViewer(
+                            child: Image.network(
+                              mediaUrl,
+                              key: ValueKey(mediaUrl + DateTime.now().millisecondsSinceEpoch.toString()),
+                              fit: BoxFit.contain,
+                              loadingBuilder: (c, child, p) => p == null
+                                  ? child
+                                  : const Center(
+                                      child: Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          CircularProgressIndicator(
+                                            color: Colors.white,
+                                          ),
+                                          SizedBox(height: 20),
+                                          Text(
+                                            'Loading photo...',
+                                            style: TextStyle(color: Colors.white70),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                              errorBuilder: (context, error, stackTrace) {
+                                print('Image load error: $error');
+                                return Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      const Icon(Icons.error_outline, color: Colors.red, size: 60),
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        'Failed to load image\n$error',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(color: Colors.grey[400]),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          )
+                        : Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (command == 'REQUEST_CAPTURE') ...[
+                                const CircularProgressIndicator(color: Colors.white),
+                                const SizedBox(height: 20),
+                                const Text(
+                                  'Capturing photo from User B...',
+                                  style: TextStyle(color: Colors.white70, fontSize: 16),
+                                ),
+                              ] else ...[
+                                const Icon(Icons.photo_camera, size: 80, color: Colors.grey),
+                                const SizedBox(height: 20),
+                                const Text(
+                                  "Waiting for photo...\nClose and try again if needed",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.grey, fontSize: 16),
+                                ),
+                              ],
+                            ],
+                          ),
+                  ),
+                  
+                  // Close button
+                  SafeArea(
+                    child: Positioned(
+                      top: 10,
+                      right: 10,
+                      child: IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white, size: 32),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.black54,
+                        ),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ),
+                  ),
+                  
+                  // Photo info overlay
+                  if (mediaUrl != null && mediaUrl.isNotEmpty)
+                    SafeArea(
+                      child: Positioned(
+                        bottom: 20,
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 20),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'Photo captured successfully',
+                                style: TextStyle(color: Colors.white, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }
 
-          // 1. MEDIA PLAYBACK
+          // 2. OTHER MEDIA
           if (mediaUrl != null && mediaUrl.isNotEmpty) {
-            if (widget.serviceType == 'audio') return _AudioPlayerWidget(audioUrl: mediaUrl);
-            if (widget.serviceType.contains('camera')) return Center(child: Image.network(mediaUrl));
-            if (widget.serviceType.contains('video')) return _VideoPlayerWidget(videoUrl: mediaUrl);
+            if (widget.serviceType == 'audio')
+              return _AudioPlayerWidget(audioUrl: mediaUrl);
+            if (widget.serviceType.contains('video'))
+              return _VideoPlayerWidget(videoUrl: mediaUrl);
           }
 
-          // 2. LIVE LOCATION (With Time Restriction)
-          if (widget.serviceType == 'location') {
-            // IF TOO EARLY -> Show Waiting Message
-            if (now.isBefore(startTime)) {
-              return Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.lock_clock, size: 60, color: Colors.orange),
-                    const SizedBox(height: 20),
-                    const Text("Session Not Started Yet", style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 10),
-                    Text("Visible at ${DateFormat('h:mm a').format(startTime)}", style: const TextStyle(color: Colors.grey)),
-                  ],
-                ),
-              );
-            }
-            // IF ON TIME -> Show Map
+          // 3. LOCATION
+          if (widget.serviceType == 'location')
             return _LocationViewer(requestId: widget.requestId);
-          }
 
-          if (status == 'completed' && mediaUrl == null) {
-            return const Center(child: Text('Session Ended', style: TextStyle(color: Colors.white)));
-          }
-
-          return const Center(child: CircularProgressIndicator());
+          return const Center(
+            child: Text("Waiting...", style: TextStyle(color: Colors.white)),
+          );
         },
       ),
     );
   }
 }
 
-// ... (Keep _LocationViewer, _VideoPlayerWidget, _AudioPlayerWidget exactly as they were in the previous code) ...
-// (I am omitting them here to save space, but you MUST keep them in the file)
-// Paste the bottom half of the previous ViewSessionScreen code here.
-// ---------------------------------------------------------------------
-// --- 1. LOCATION VIEWER ---
+// ... (Keep _LocationViewer, _VideoPlayerWidget, _AudioPlayerWidget EXACTLY as they were) ...
+// ... (Pasted for convenience below) ...
 class _LocationViewer extends StatefulWidget {
   final String requestId;
   const _LocationViewer({required this.requestId});
@@ -107,56 +221,50 @@ class _LocationViewerState extends State<_LocationViewer> {
   final MapController _mapController = MapController();
   LatLng? _senderPosition;
   bool _isMapReady = false;
-
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<Map<String, dynamic>>>(
       stream: _locationService.getSessionStream(widget.requestId),
       builder: (context, snapshot) {
-
-        String statusText = "Connecting to Signal...";
-        Color statusColor = Colors.orange;
-
         if (snapshot.hasData && snapshot.data!.isNotEmpty) {
           var data = snapshot.data!.first;
           if (data['lat'] != null && data['lng'] != null) {
-            _senderPosition = LatLng((data['lat'] as num).toDouble(), (data['lng'] as num).toDouble());
-            statusText = "LIVE TRACKING ACTIVE";
-            statusColor = Colors.green;
+            _senderPosition = LatLng(
+              (data['lat'] as num).toDouble(),
+              (data['lng'] as num).toDouble(),
+            );
             if (_isMapReady) _mapController.move(_senderPosition!, 16.0);
           }
         }
-
-        return Stack(
+        return FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629),
+            initialZoom: 4.0,
+            onMapReady: () {
+              _isMapReady = true;
+            },
+          ),
           children: [
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _senderPosition ?? const LatLng(20.5937, 78.9629),
-                initialZoom: 4.0,
-                onMapReady: () { _isMapReady = true; },
-              ),
-              children: [
-                TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.example.streamix'),
-                if (_senderPosition != null)
-                  MarkerLayer(markers: [Marker(point: _senderPosition!, width: 80, height: 80, child: const Icon(Icons.location_on, color: Colors.red, size: 40))]),
-              ],
+            TileLayer(
+              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+              userAgentPackageName: 'com.example.streamix',
             ),
-            Positioned(
-              bottom: 30, left: 20, right: 20,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(color: Colors.black.withOpacity(0.8), borderRadius: BorderRadius.circular(12), border: Border.all(color: statusColor)),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if(_senderPosition == null) const SizedBox(width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
-                    const SizedBox(width: 10),
-                    Text(statusText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-                  ],
-                ),
+            if (_senderPosition != null)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: _senderPosition!,
+                    width: 80,
+                    height: 80,
+                    child: const Icon(
+                      Icons.location_on,
+                      color: Colors.red,
+                      size: 40,
+                    ),
+                  ),
+                ],
               ),
-            )
           ],
         );
       },
@@ -170,17 +278,79 @@ class _VideoPlayerWidget extends StatefulWidget {
   @override
   State<_VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
 }
+
 class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
   bool _isInitialized = false;
   @override
-  void initState() { super.initState(); _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))..initialize().then((_) { setState(() { _isInitialized = true; _controller.setLooping(true); _controller.play(); }); }); }
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
+      ..initialize().then((_) {
+        setState(() {
+          _isInitialized = true;
+          _controller.setLooping(true);
+          _controller.play();
+        });
+      });
+  }
+
   @override
-  void dispose() { _controller.dispose(); super.dispose(); }
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (!_isInitialized) return const Center(child: CircularProgressIndicator());
-    return Center(child: AspectRatio(aspectRatio: _controller.value.aspectRatio, child: Stack(alignment: Alignment.bottomCenter, children: [VideoPlayer(_controller), GestureDetector(onTap: () { setState(() { _controller.value.isPlaying ? _controller.pause() : _controller.play(); }); }, child: Container(color: Colors.transparent, child: Center(child: AnimatedOpacity(opacity: _controller.value.isPlaying ? 0.0 : 1.0, duration: const Duration(milliseconds: 300), child: Container(decoration: const BoxDecoration(color: Colors.black45, shape: BoxShape.circle), padding: const EdgeInsets.all(20), child: const Icon(Icons.play_arrow, size: 60, color: Colors.white)))))), VideoProgressIndicator(_controller, allowScrubbing: true, colors: const VideoProgressColors(playedColor: Colors.red))])));
+    if (!_isInitialized)
+      return const Center(child: CircularProgressIndicator());
+    return Center(
+      child: AspectRatio(
+        aspectRatio: _controller.value.aspectRatio,
+        child: Stack(
+          alignment: Alignment.bottomCenter,
+          children: [
+            VideoPlayer(_controller),
+            GestureDetector(
+              onTap: () {
+                setState(() {
+                  _controller.value.isPlaying
+                      ? _controller.pause()
+                      : _controller.play();
+                });
+              },
+              child: Container(
+                color: Colors.transparent,
+                child: Center(
+                  child: AnimatedOpacity(
+                    opacity: _controller.value.isPlaying ? 0.0 : 1.0,
+                    duration: const Duration(milliseconds: 300),
+                    child: Container(
+                      decoration: const BoxDecoration(
+                        color: Colors.black45,
+                        shape: BoxShape.circle,
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      child: const Icon(
+                        Icons.play_arrow,
+                        size: 60,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            VideoProgressIndicator(
+              _controller,
+              allowScrubbing: true,
+              colors: const VideoProgressColors(playedColor: Colors.red),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -190,16 +360,79 @@ class _AudioPlayerWidget extends StatefulWidget {
   @override
   State<_AudioPlayerWidget> createState() => _AudioPlayerWidgetState();
 }
+
 class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   final FlutterSoundPlayer _player = FlutterSoundPlayer();
   bool _isPlaying = false;
   bool _isInitialized = false;
   @override
-  void initState() { super.initState(); _initPlayer(); }
-  Future<void> _initPlayer() async { await _player.openPlayer(); setState(() => _isInitialized = true); }
+  void initState() {
+    super.initState();
+    _initPlayer();
+  }
+
+  Future<void> _initPlayer() async {
+    await _player.openPlayer();
+    setState(() => _isInitialized = true);
+  }
+
   @override
-  void dispose() { _player.closePlayer(); super.dispose(); }
-  Future<void> _togglePlay() async { if (!_isInitialized) return; if (_isPlaying) { await _player.stopPlayer(); setState(() => _isPlaying = false); } else { await _player.startPlayer(fromURI: widget.audioUrl, whenFinished: () { setState(() => _isPlaying = false); }); setState(() => _isPlaying = true); } }
+  void dispose() {
+    _player.closePlayer();
+    super.dispose();
+  }
+
+  Future<void> _togglePlay() async {
+    if (!_isInitialized) return;
+    if (_isPlaying) {
+      await _player.stopPlayer();
+      setState(() => _isPlaying = false);
+    } else {
+      await _player.startPlayer(
+        fromURI: widget.audioUrl,
+        whenFinished: () {
+          setState(() => _isPlaying = false);
+        },
+      );
+      setState(() => _isPlaying = true);
+    }
+  }
+
   @override
-  Widget build(BuildContext context) { return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Container(padding: const EdgeInsets.all(30), decoration: BoxDecoration(color: Colors.grey[900], shape: BoxShape.circle, border: Border.all(color: _isPlaying ? Colors.green : Colors.white, width: 2)), child: Icon(Icons.music_note, size: 60, color: _isPlaying ? Colors.green : Colors.white)), const SizedBox(height: 40), ElevatedButton.icon(icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow), label: Text(_isPlaying ? "STOP AUDIO" : "PLAY RECORDING"), style: ElevatedButton.styleFrom(backgroundColor: _isPlaying ? Colors.red : Colors.blue, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15)), onPressed: _togglePlay)])); }
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(30),
+            decoration: BoxDecoration(
+              color: Colors.grey[900],
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: _isPlaying ? Colors.green : Colors.white,
+                width: 2,
+              ),
+            ),
+            child: Icon(
+              Icons.music_note,
+              size: 60,
+              color: _isPlaying ? Colors.green : Colors.white,
+            ),
+          ),
+          const SizedBox(height: 40),
+          ElevatedButton.icon(
+            icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
+            label: Text(_isPlaying ? "STOP AUDIO" : "PLAY RECORDING"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _isPlaying ? Colors.red : Colors.blue,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+            ),
+            onPressed: _togglePlay,
+          ),
+        ],
+      ),
+    );
+  }
 }
