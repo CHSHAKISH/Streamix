@@ -240,8 +240,11 @@ class _ChatScreenState extends State<ChatScreen> {
                     return;
                   }
 
-                  // For camera services, trigger capture and wait for photo
-                  if (service.contains('camera')) {
+                  // For camera, video, and audio services, trigger capture/recording and wait for media
+                  if (service.contains('camera') || service.contains('video') || service == 'audio') {
+                    bool isVideo = service.contains('video');
+                    bool isAudio = service == 'audio';
+                    
                     // Show loading dialog
                     if (context.mounted) {
                       showDialog(
@@ -254,9 +257,13 @@ class _ChatScreenState extends State<ChatScreen> {
                             children: [
                               const CircularProgressIndicator(color: Colors.white),
                               const SizedBox(height: 20),
-                              const Text(
-                                '📸 Capturing photo from User B...',
-                                style: TextStyle(color: Colors.white),
+                              Text(
+                                isVideo 
+                                    ? '🎥 Recording 10s video from User B...' 
+                                    : isAudio
+                                        ? '🎤 Recording 10s audio from User B...'
+                                        : '📸 Capturing photo from User B...',
+                                style: const TextStyle(color: Colors.white),
                                 textAlign: TextAlign.center,
                               ),
                             ],
@@ -265,12 +272,12 @@ class _ChatScreenState extends State<ChatScreen> {
                       );
                     }
                     
-                    // Trigger the capture
+                    // Trigger the capture/recording
                     await _ticketService.sendCameraTrigger(requestId);
                     
-                    // Wait for photo to be uploaded (listen to Firestore)
-                    bool photoReady = false;
-                    String? photoUrl;
+                    // Wait for media to be uploaded (listen to Firestore)
+                    bool mediaReady = false;
+                    String? mediaUrl;
                     
                     final subscription = FirebaseFirestore.instance
                         .collection('requests')
@@ -283,17 +290,23 @@ class _ChatScreenState extends State<ChatScreen> {
                         final url = data?['mediaUrl'] as String?;
                         
                         if (command == 'COMPLETED' && url != null && url.isNotEmpty) {
-                          photoReady = true;
-                          photoUrl = url;
+                          mediaReady = true;
+                          mediaUrl = url;
                         }
                       }
                     });
                     
-                    // Wait up to 10 seconds for photo
+                    // Wait up to 20 seconds for video/audio (10s recording + 10s processing/upload) or 12s for photo
                     int waitCount = 0;
-                    while (!photoReady && waitCount < 20) { // 20 x 500ms = 10 seconds
+                    int maxWait = (isVideo || isAudio) ? 40 : 24; // 40 * 500ms = 20s for video/audio, 24 * 500ms = 12s for photo
+                    while (!mediaReady && waitCount < maxWait) {
                       await Future.delayed(const Duration(milliseconds: 500));
                       waitCount++;
+                      
+                      // Log progress every 5 seconds
+                      if (waitCount % 10 == 0) {
+                        print('⏳ Waiting for ${isVideo ? 'video' : isAudio ? 'audio' : 'photo'}... ${waitCount * 500 ~/ 1000}s elapsed');
+                      }
                     }
                     
                     // Cancel subscription
@@ -304,8 +317,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       Navigator.of(context, rootNavigator: true).pop();
                     }
                     
-                    // Open viewer if photo is ready
-                    if (photoReady && photoUrl != null && context.mounted) {
+                    // Open viewer if media is ready
+                    if (mediaReady && mediaUrl != null && context.mounted) {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -316,11 +329,42 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       );
                     } else if (context.mounted) {
+                      // Check the command status to give better error message
+                      final finalDoc = await FirebaseFirestore.instance
+                          .collection('requests')
+                          .doc(requestId)
+                          .get();
+                      final finalCommand = finalDoc.data()?['remoteCommand'] as String?;
+                      
+                      String errorMsg;
+                      if (finalCommand == 'REQUEST_CAPTURE') {
+                        errorMsg = isVideo 
+                            ? '⚠️ Video recording in progress but not completed yet. Please wait or try again.'
+                            : isAudio
+                                ? '⚠️ Audio recording in progress but not completed yet. Please wait or try again.'
+                                : '⚠️ Photo capture in progress but not completed yet. Please wait or try again.';
+                      } else {
+                        errorMsg = isVideo 
+                            ? '⚠️ Video recording timeout. Make sure User B has opened the session first.'
+                            : isAudio
+                                ? '⚠️ Audio recording timeout. Make sure User B has opened the session first.'
+                                : '⚠️ Photo capture timeout. Make sure User B has opened the session first.';
+                      }
+                      
                       // Show error if timeout
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('⚠️ Photo capture timeout. User B may not be available.'),
+                        SnackBar(
+                          content: Text(errorMsg),
                           backgroundColor: Colors.orange,
+                          duration: const Duration(seconds: 5),
+                          action: SnackBarAction(
+                            label: 'Retry',
+                            textColor: Colors.white,
+                            onPressed: () {
+                              // Trigger again
+                              _ticketService.sendCameraTrigger(requestId);
+                            },
+                          ),
                         ),
                       );
                     }

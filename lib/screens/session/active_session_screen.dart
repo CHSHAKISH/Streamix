@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 class ActiveSessionScreen extends StatefulWidget {
   final String requestId;
-  final String serviceType; // 'front_camera' or 'back_camera'
+  final String serviceType; // 'front_camera', 'back_camera', 'front_video', 'back_video', or 'audio'
   final DateTime scheduledStartTime;
   final DateTime scheduledEndTime;
 
@@ -74,10 +74,16 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         Navigator.pop(context);
       }
     }
-    // C. On Time -> Show standby message for camera services
+    // C. On Time -> Show standby message for camera/video/audio services
     else {
+      bool isVideo = widget.serviceType.contains('video');
+      bool isAudio = widget.serviceType == 'audio';
       setState(() {
-        _statusMessage = "Camera Ready for Remote Capture";
+        _statusMessage = isVideo 
+            ? "Video Ready for Remote Recording" 
+            : isAudio
+                ? "Audio Ready for Remote Recording"
+                : "Camera Ready for Remote Capture";
       });
     }
   }
@@ -108,8 +114,24 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
             }
           }
 
-          bool photoExists = mediaUrl != null && mediaUrl.isNotEmpty;
+          bool mediaExists = mediaUrl != null && mediaUrl.isNotEmpty;
           bool isProcessing = remoteCommand == 'REQUEST_CAPTURE';
+          bool isVideo = widget.serviceType.contains('video');
+          bool isAudio = widget.serviceType == 'audio';
+          
+          String processingText = isVideo 
+              ? "User A viewing file\nRecording 10s video automatically..." 
+              : isAudio
+                  ? "User A viewing file\nRecording 10s audio automatically..."
+                  : "User A viewing file\nTaking photo automatically...";
+          
+          String successText = isVideo ? "Video Sent!" : isAudio ? "Audio Sent!" : "Photo Sent!";
+          
+          String detailText = isVideo
+              ? "Video sent successfully!\n\nVideo still active.\nUser A can view again anytime.\n\nTap STOP SHARING to end."
+              : isAudio
+                  ? "Audio sent successfully!\n\nAudio still active.\nUser A can request again anytime.\n\nTap STOP SHARING to end."
+                  : "Photo sent successfully!\n\nCamera still active.\nUser A can view again anytime.\n\nTap STOP SHARING to end.";
 
           return Stack(
             fit: StackFit.expand,
@@ -134,35 +156,18 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
                             color: Colors.black54,
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: const Text(
-                            "User A viewing file\nTaking photo automatically...",
+                          child: Text(
+                            processingText,
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                           ),
                         ),
                       ]
                       // Success State
-                      else if (photoExists) ...[
+                      else if (mediaExists) ...[
                         const Icon(Icons.check_circle, color: Colors.green, size: 60),
                         const SizedBox(height: 10),
-                        const Text("Photo Sent!", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 20),
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Text(
-                            "Photo sent successfully!\n\nCamera still active.\nUser A can view again anytime.\n\nTap STOP SHARING to end.",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white70, fontSize: 16),
-                          ),
-                        ),
-                      ]
-                      // Standby State
-                      else ...[
-                        const Icon(Icons.camera_alt, color: Colors.white70, size: 60),
+                        Text(successText, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
                         const SizedBox(height: 20),
                         Container(
                           padding: const EdgeInsets.all(16),
@@ -171,7 +176,28 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Text(
-                            "📷 Camera Ready\n\n$_statusMessage\n\nKeep this app open.\nWhen User A clicks VIEW FILE,\nphoto will be taken automatically.",
+                            detailText,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70, fontSize: 16),
+                          ),
+                        ),
+                      ]
+                      // Standby State
+                      else ...[
+                        Icon(
+                          isVideo ? Icons.videocam : isAudio ? Icons.mic : Icons.camera_alt, 
+                          color: Colors.white70, 
+                          size: 60
+                        ),
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            "${isVideo ? '🎥' : isAudio ? '🎤' : '📷'} ${isVideo ? 'Video' : isAudio ? 'Audio' : 'Camera'} Ready\n\n$_statusMessage\n\nKeep this app open.\nWhen User A clicks VIEW FILE,\n${isVideo ? 'video will be recorded' : isAudio ? 'audio will be recorded' : 'photo will be taken'} automatically.",
                             textAlign: TextAlign.center,
                             style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                           ),

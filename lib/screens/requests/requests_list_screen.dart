@@ -4,9 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:streamix/screens/session/active_session_screen.dart'; // Camera
-import 'package:streamix/screens/session/audio_session_screen.dart';  // Audio
-import 'package:streamix/screens/session/video_session_screen.dart';  // Video
+import 'package:streamix/screens/session/active_session_screen.dart'; // Camera, Video & Audio
 // REMOVED STREAM IMPORT
 import 'package:streamix/services/location_service.dart';             // Location
 import 'package:streamix/services/ticket_service.dart';
@@ -39,12 +37,8 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
   }
 
   void _openSession(String requestId, String service, DateTime start, DateTime end) {
-    if (service == 'audio') {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => AudioSessionScreen(requestId: requestId)));
-    } else if (service.contains('video')) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => VideoSessionScreen(requestId: requestId, serviceType: service)));
-    } else if (service.contains('camera')) {
-      // Route to Standard Camera Session (No Remote Trigger)
+    // Route to Active Session Screen for camera, video, and audio (automatic capture/recording)
+    if (service.contains('video') || service.contains('camera') || service == 'audio') {
       Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(
           requestId: requestId,
           serviceType: service,

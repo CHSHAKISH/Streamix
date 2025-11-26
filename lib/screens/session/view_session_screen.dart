@@ -186,15 +186,97 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
             );
           }
 
-          // 2. OTHER MEDIA
-          if (mediaUrl != null && mediaUrl.isNotEmpty) {
-            if (widget.serviceType == 'audio')
-              return _AudioPlayerWidget(audioUrl: mediaUrl);
-            if (widget.serviceType.contains('video'))
-              return _VideoPlayerWidget(videoUrl: mediaUrl);
+          // 2. VIDEO PLAYBACK (Similar to camera - fullscreen with controls)
+          if (widget.serviceType.contains('video')) {
+            return Container(
+              color: Colors.black,
+              child: Stack(
+                children: [
+                  // Fullscreen Video Player
+                  Center(
+                    child: mediaUrl != null && mediaUrl.isNotEmpty
+                        ? _VideoPlayerWidget(videoUrl: mediaUrl)
+                        : Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (command == 'REQUEST_CAPTURE') ...[
+                                const CircularProgressIndicator(color: Colors.white),
+                                const SizedBox(height: 20),
+                                const Text(
+                                  'Recording 10s video from User B...',
+                                  style: TextStyle(color: Colors.white70, fontSize: 16),
+                                ),
+                              ] else ...[
+                                const Icon(Icons.videocam, size: 80, color: Colors.grey),
+                                const SizedBox(height: 20),
+                                const Text(
+                                  "Waiting for video...\nClose and try again if needed",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.grey, fontSize: 16),
+                                ),
+                              ],
+                            ],
+                          ),
+                  ),
+                  
+                  // Close button
+                  SafeArea(
+                    child: Positioned(
+                      top: 10,
+                      left: 10,
+                      child: IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white, size: 32),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.black54,
+                        ),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ),
+                  ),
+                  
+                  // Video info overlay
+                  if (mediaUrl != null && mediaUrl.isNotEmpty)
+                    SafeArea(
+                      child: Positioned(
+                        bottom: 60, // Above progress bar
+                        left: 0,
+                        right: 0,
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 20),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.black54,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.check_circle, color: Colors.green, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                '10-second video recorded',
+                                style: TextStyle(color: Colors.white, fontSize: 14),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }
+          
+          // 3. AUDIO PLAYBACK
+          if (widget.serviceType == 'audio') {
+            return mediaUrl != null && mediaUrl.isNotEmpty
+                ? _AudioPlayerWidget(audioUrl: mediaUrl)
+                : const Center(
+                    child: Text("Waiting for audio...", style: TextStyle(color: Colors.white)),
+                  );
           }
 
-          // 3. LOCATION
+          // 4. LOCATION
           if (widget.serviceType == 'location')
             return _LocationViewer(requestId: widget.requestId);
 
@@ -282,6 +364,8 @@ class _VideoPlayerWidget extends StatefulWidget {
 class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   late VideoPlayerController _controller;
   bool _isInitialized = false;
+  bool _isMuted = false;
+  
   @override
   void initState() {
     super.initState();
@@ -290,6 +374,7 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
         setState(() {
           _isInitialized = true;
           _controller.setLooping(true);
+          _controller.setVolume(1.0); // Enable audio by default
           _controller.play();
         });
       });
@@ -299,6 +384,13 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  void _toggleMute() {
+    setState(() {
+      _isMuted = !_isMuted;
+      _controller.setVolume(_isMuted ? 0.0 : 1.0);
+    });
   }
 
   @override
@@ -312,6 +404,8 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
           alignment: Alignment.bottomCenter,
           children: [
             VideoPlayer(_controller),
+            
+            // Play/Pause overlay
             GestureDetector(
               onTap: () {
                 setState(() {
@@ -342,6 +436,29 @@ class _VideoPlayerWidgetState extends State<_VideoPlayerWidget> {
                 ),
               ),
             ),
+            
+            // Mute/Unmute button (top right)
+            Positioned(
+              top: 10,
+              right: 10,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black54,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: IconButton(
+                  icon: Icon(
+                    _isMuted ? Icons.volume_off : Icons.volume_up,
+                    color: Colors.white,
+                    size: 28,
+                  ),
+                  onPressed: _toggleMute,
+                  tooltip: _isMuted ? 'Unmute' : 'Mute',
+                ),
+              ),
+            ),
+            
+            // Progress bar
             VideoProgressIndicator(
               _controller,
               allowScrubbing: true,
@@ -365,6 +482,7 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   final FlutterSoundPlayer _player = FlutterSoundPlayer();
   bool _isPlaying = false;
   bool _isInitialized = false;
+  
   @override
   void initState() {
     super.initState();
@@ -372,8 +490,20 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   }
 
   Future<void> _initPlayer() async {
-    await _player.openPlayer();
-    setState(() => _isInitialized = true);
+    try {
+      await _player.openPlayer();
+      print('🎵 [AudioPlayer] Player opened successfully');
+      print('🎵 [AudioPlayer] Audio URL: ${widget.audioUrl}');
+      setState(() => _isInitialized = true);
+      
+      // Auto-play the audio when ready
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted && _isInitialized) {
+        _togglePlay();
+      }
+    } catch (e) {
+      print('❌ [AudioPlayer] Failed to open player: $e');
+    }
   }
 
   @override
@@ -383,18 +513,43 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
   }
 
   Future<void> _togglePlay() async {
-    if (!_isInitialized) return;
-    if (_isPlaying) {
-      await _player.stopPlayer();
+    if (!_isInitialized) {
+      print('⚠️ [AudioPlayer] Player not initialized');
+      return;
+    }
+    
+    try {
+      if (_isPlaying) {
+        print('🎵 [AudioPlayer] Stopping playback');
+        await _player.stopPlayer();
+        setState(() => _isPlaying = false);
+      } else {
+        print('🎵 [AudioPlayer] Starting playback from: ${widget.audioUrl}');
+        
+        // Set volume to maximum
+        await _player.setVolume(1.0);
+        
+        await _player.startPlayer(
+          fromURI: widget.audioUrl,
+          codec: Codec.aacADTS,
+          whenFinished: () {
+            print('🎵 [AudioPlayer] Playback finished');
+            if (mounted) {
+              setState(() => _isPlaying = false);
+            }
+          },
+        );
+        setState(() => _isPlaying = true);
+        print('🎵 [AudioPlayer] Playback started successfully');
+      }
+    } catch (e) {
+      print('❌ [AudioPlayer] Error during playback: $e');
       setState(() => _isPlaying = false);
-    } else {
-      await _player.startPlayer(
-        fromURI: widget.audioUrl,
-        whenFinished: () {
-          setState(() => _isPlaying = false);
-        },
-      );
-      setState(() => _isPlaying = true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error playing audio: $e'), backgroundColor: Colors.red)
+        );
+      }
     }
   }
 
@@ -404,6 +559,7 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
+          // Audio Icon with Animation
           Container(
             padding: const EdgeInsets.all(30),
             decoration: BoxDecoration(
@@ -415,22 +571,42 @@ class _AudioPlayerWidgetState extends State<_AudioPlayerWidget> {
               ),
             ),
             child: Icon(
-              Icons.music_note,
+              _isPlaying ? Icons.volume_up : Icons.music_note,
               size: 60,
               color: _isPlaying ? Colors.green : Colors.white,
             ),
           ),
+          const SizedBox(height: 20),
+          
+          // Status Text
+          Text(
+            _isPlaying ? 'Playing 10-second recording...' : 'Tap to play',
+            style: const TextStyle(color: Colors.white70, fontSize: 16),
+          ),
+          
           const SizedBox(height: 40),
+          
+          // Play/Stop Button
           ElevatedButton.icon(
             icon: Icon(_isPlaying ? Icons.stop : Icons.play_arrow),
             label: Text(_isPlaying ? "STOP AUDIO" : "PLAY RECORDING"),
             style: ElevatedButton.styleFrom(
-              backgroundColor: _isPlaying ? Colors.red : Colors.blue,
+              backgroundColor: _isPlaying ? Colors.red : Colors.green,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
             ),
-            onPressed: _togglePlay,
+            onPressed: _isInitialized ? _togglePlay : null,
           ),
+          
+          // Debug info
+          if (!_isInitialized)
+            const Padding(
+              padding: EdgeInsets.only(top: 20),
+              child: Text(
+                'Initializing player...',
+                style: TextStyle(color: Colors.orange),
+              ),
+            ),
         ],
       ),
     );
