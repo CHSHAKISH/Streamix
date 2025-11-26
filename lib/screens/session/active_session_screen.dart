@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import '../../services/webrtc_service.dart';
+import 'package:camera/camera.dart';
 
 class ActiveSessionScreen extends StatefulWidget {
   final String requestId;
-  final String serviceType; // 'front_camera', 'back_camera', 'front_video', 'back_video', or 'audio'
+  final String serviceType; // 'front_camera', 'back_camera', 'front_video', 'back_video', 'audio', 'front_stream', or 'back_stream'
   final DateTime scheduledStartTime;
   final DateTime scheduledEndTime;
 
@@ -23,6 +26,11 @@ class ActiveSessionScreen extends StatefulWidget {
 class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   // State Variables
   String _statusMessage = "Checking Schedule...";
+  
+  // WebRTC for streaming
+  WebRTCService? _webrtcService;
+  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
+  bool _isStreamInitialized = false;
 
   // Timers
   Timer? _scheduleTimer;
@@ -31,11 +39,95 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   void initState() {
     super.initState();
     _checkSchedule();
+    
+    // Initialize streaming if service is stream type
+    if (widget.serviceType.contains('stream')) {
+      _initializeStreaming();
+    }
+  }
+
+  Future<void> _initializeStreaming() async {
+    try {
+      print('📹 Initializing streaming for ${widget.serviceType}...');
+      
+      // Initialize video renderer
+      await _localRenderer.initialize();
+      print('✅ Local renderer initialized');
+      
+      // Get camera ID based on service type
+      String? cameraId;
+      try {
+        final cameras = await availableCameras();
+        print('📷 Available cameras: ${cameras.length}');
+        for (var cam in cameras) {
+          print('   - ${cam.name}: ${cam.lensDirection}');
+        }
+        
+        if (widget.serviceType == 'front_stream') {
+          final frontCamera = cameras.firstWhere(
+            (camera) => camera.lensDirection == CameraLensDirection.front,
+          );
+          cameraId = frontCamera.name;
+        } else {
+          final backCamera = cameras.firstWhere(
+            (camera) => camera.lensDirection == CameraLensDirection.back,
+          );
+          cameraId = backCamera.name;
+        }
+        print('📷 Selected camera: $cameraId');
+      } catch (e) {
+        print('⚠️ Could not get specific camera, using default: $e');
+      }
+      
+      // Create WebRTC service as broadcaster (initiator)
+      _webrtcService = WebRTCService(
+        requestId: widget.requestId,
+        isInitiator: true, // User B is the broadcaster
+        onRemoteStream: null, // Broadcaster doesn't receive stream
+        onConnectionStateChange: (state) {
+          print('🔗 Broadcaster connection state: $state');
+        },
+      );
+
+      await _webrtcService!.initialize(cameraId: cameraId);
+      print('✅ WebRTC service initialized');
+      
+      // Set local stream to renderer
+      if (_webrtcService!.localStream != null) {
+        print('✅ Local stream available, setting to renderer');
+        setState(() {
+          _localRenderer.srcObject = _webrtcService!.localStream;
+          _isStreamInitialized = true;
+        });
+        print('✅ Local stream set to renderer');
+      } else {
+        print('⚠️ Local stream is null!');
+      }
+      
+      // Create offer for User A to connect
+      await _webrtcService!.createOffer();
+      
+      print('✅ Streaming initialized and offer sent');
+    } catch (e) {
+      print('❌ Error initializing streaming: $e');
+      print('Stack trace: ${StackTrace.current}');
+      setState(() {
+        _statusMessage = "Stream initialization failed: $e";
+      });
+    }
+  }
+
+  Future<void> _cleanupStreaming() async {
+    await _webrtcService?.dispose();
+    await _localRenderer.dispose();
   }
 
   @override
   void dispose() {
     _scheduleTimer?.cancel();
+    if (widget.serviceType.contains('stream')) {
+      _cleanupStreaming();
+    }
     super.dispose();
   }
 
@@ -74,16 +166,19 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         Navigator.pop(context);
       }
     }
-    // C. On Time -> Show standby message for camera/video/audio services
+    // C. On Time -> Show standby message for camera/video/audio/stream services
     else {
       bool isVideo = widget.serviceType.contains('video');
       bool isAudio = widget.serviceType == 'audio';
+      bool isStream = widget.serviceType.contains('stream');
       setState(() {
         _statusMessage = isVideo 
             ? "Video Ready for Remote Recording" 
             : isAudio
                 ? "Audio Ready for Remote Recording"
-                : "Camera Ready for Remote Capture";
+                : isStream
+                    ? "Stream Ready - Camera Active"
+                    : "Camera Ready for Remote Capture";
       });
     }
   }
@@ -118,6 +213,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           bool isProcessing = remoteCommand == 'REQUEST_CAPTURE';
           bool isVideo = widget.serviceType.contains('video');
           bool isAudio = widget.serviceType == 'audio';
+          bool isStream = widget.serviceType.contains('stream');
           
           String processingText = isVideo 
               ? "User A viewing file\nRecording 10s video automatically..." 
@@ -127,17 +223,33 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           
           String successText = isVideo ? "Video Sent!" : isAudio ? "Audio Sent!" : "Photo Sent!";
           
+          // For stream services, show different message
+          if (isStream) {
+            processingText = "User A is viewing your live stream...";
+            successText = "Stream Active";
+          }
+          
           String detailText = isVideo
               ? "Video sent successfully!\n\nVideo still active.\nUser A can view again anytime.\n\nTap STOP SHARING to end."
               : isAudio
                   ? "Audio sent successfully!\n\nAudio still active.\nUser A can request again anytime.\n\nTap STOP SHARING to end."
-                  : "Photo sent successfully!\n\nCamera still active.\nUser A can view again anytime.\n\nTap STOP SHARING to end.";
+                  : isStream
+                      ? "Live stream active.\nUser A is viewing your camera.\n\nTap STOP SHARING to end stream."
+                      : "Photo sent successfully!\n\nCamera still active.\nUser A can view again anytime.\n\nTap STOP SHARING to end.";
 
           return Stack(
             fit: StackFit.expand,
             children: [
-              // BLACK BACKGROUND
-              Container(color: Colors.black),
+              // BLACK BACKGROUND OR STREAM PREVIEW
+              if (isStream && _localRenderer.srcObject != null)
+                // Show local camera preview for streaming
+                RTCVideoView(
+                  _localRenderer,
+                  mirror: widget.serviceType == 'front_stream',
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                )
+              else
+                Container(color: Colors.black),
 
               // CENTER: MESSAGES & STATUS
               Center(

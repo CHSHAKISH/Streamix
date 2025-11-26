@@ -10,6 +10,7 @@ import 'firebase_options.dart';
 import 'package:streamix/services/auth_service.dart';
 import 'package:streamix/services/notification_service.dart';
 import 'package:streamix/widgets/global_camera_listener.dart';
+import 'package:streamix/widgets/notification_listener.dart' show InAppNotificationListener;
 
 // Top-level background handler
 @pragma('vm:entry-point')
@@ -112,8 +113,10 @@ class _StreamixAppState extends State<StreamixApp> {
         ),
       ),
       // Wrap with GlobalCameraHandler for remote camera triggering
-      home: const GlobalCameraHandler(
-        child: AuthWrapper(),
+      home: GlobalCameraHandler(
+        child: InAppNotificationListener(
+          child: const AuthWrapper(),
+        ),
       ),
     );
   }

@@ -8,6 +8,7 @@ import 'package:streamix/screens/session/active_session_screen.dart'; // Camera,
 // REMOVED STREAM IMPORT
 import 'package:streamix/services/location_service.dart';             // Location
 import 'package:streamix/services/ticket_service.dart';
+import 'package:streamix/services/notification_service.dart';
 
 class RequestsListScreen extends StatefulWidget {
   const RequestsListScreen({super.key});
@@ -19,8 +20,11 @@ class RequestsListScreen extends StatefulWidget {
 class _RequestsListScreenState extends State<RequestsListScreen> {
   final TicketService _ticketService = TicketService();
   final LocationService _locationService = LocationService();
+  final NotificationService _notificationService = NotificationService();
   final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
   Timer? _timer;
+  StreamSubscription? _newRequestSubscription;
+  final Set<String> _shownRequests = {};
 
   @override
   void initState() {
@@ -28,17 +32,59 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) setState(() {});
     });
+    _listenForNewRequests();
+  }
+
+  void _listenForNewRequests() {
+    // Listen for new incoming requests
+    _newRequestSubscription = FirebaseFirestore.instance
+        .collection('requests')
+        .where('peerUserId', isEqualTo: _currentUserId)
+        .where('status', isEqualTo: 'pending')
+        .snapshots()
+        .listen((snapshot) {
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final data = change.doc.data();
+          if (data != null) {
+            final requestId = change.doc.id;
+            
+            // Don't show notification if we've already shown it
+            if (_shownRequests.contains(requestId)) {
+              continue;
+            }
+            _shownRequests.add(requestId);
+            
+            final requesterName = data['requesterName'] as String? ?? 'Someone';
+            final serviceType = data['serviceType'] as String?;
+            
+            // Show notification after a small delay to ensure context is ready
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (context.mounted) {
+                _notificationService.showInAppNotification(
+                  context,
+                  'New Request! 📩',
+                  '$requesterName is requesting $serviceType',
+                  backgroundColor: Colors.blue.shade900,
+                );
+              }
+            });
+          }
+        }
+      }
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _newRequestSubscription?.cancel();
     super.dispose();
   }
 
   void _openSession(String requestId, String service, DateTime start, DateTime end) {
-    // Route to Active Session Screen for camera, video, and audio (automatic capture/recording)
-    if (service.contains('video') || service.contains('camera') || service == 'audio') {
+    // Route to Active Session Screen for camera, video, audio, and stream services
+    if (service.contains('video') || service.contains('camera') || service == 'audio' || service.contains('stream')) {
       Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(
           requestId: requestId,
           serviceType: service,

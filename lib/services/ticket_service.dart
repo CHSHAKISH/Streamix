@@ -62,6 +62,27 @@ class TicketService {
 
   Future<void> updateRequestStatus(String requestId, bool accepted) async {
     await _firestore.collection('requests').doc(requestId).update({'status': accepted ? 'accepted' : 'denied'});
+    
+    // Notify the requester (User A)
+    try {
+      DocumentSnapshot requestDoc = await _firestore.collection('requests').doc(requestId).get();
+      if (requestDoc.exists) {
+        final data = requestDoc.data() as Map<String, dynamic>;
+        String requesterId = data['requesterId'];
+        String serviceType = data['serviceType'];
+        DocumentSnapshot myDoc = await _firestore.collection('users').doc(_currentUserId).get();
+        String myName = (myDoc.data() as Map)['name'] ?? 'User';
+        
+        await _sendNotificationV1(
+          targetUserId: requesterId,
+          title: accepted ? "Request Accepted" : "Request Denied",
+          body: "$myName ${accepted ? 'accepted' : 'denied'} your $serviceType request",
+          type: accepted ? 'accepted' : 'denied',
+        );
+      }
+    } catch (e) {
+      print('Error sending notification: $e');
+    }
   }
 
   Future<void> notifySessionStarted(String requestId) async { /* ... */ }

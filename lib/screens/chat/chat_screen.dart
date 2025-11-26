@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:streamix/screens/chat/request_dialog.dart';
 import 'package:streamix/screens/session/view_session_screen.dart';
+import 'package:streamix/screens/session/live_stream_viewer_screen.dart';
 import 'package:streamix/services/ticket_service.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -235,6 +236,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       SnackBar(
                         content: Text("This service will start at ${DateFormat('h:mm a').format(startTime)}"),
                         backgroundColor: Colors.orange,
+                      ),
+                    );
+                    return;
+                  }
+
+                  // For stream services (front_stream, back_stream), open live viewer
+                  if (service.contains('stream')) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => LiveStreamViewerScreen(
+                          requestId: requestId,
+                          serviceType: service,
+                        ),
                       ),
                     );
                     return;

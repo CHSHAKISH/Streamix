@@ -114,6 +114,12 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         
         print("📄 [GlobalCamera] Checking doc ${doc.id}: serviceType=$service");
         
+        // Skip stream services (handled by WebRTC in ActiveSessionScreen)
+        if (service.contains('stream')) {
+          print("   ⏭️ Stream service, handled by WebRTC, skipping GlobalCamera");
+          return false;
+        }
+        
         // Handle camera, video, and audio services
         if (!service.contains('camera') && !service.contains('video') && service != 'audio') {
           print("   ❌ Not a camera/video/audio service, skipping");
@@ -140,11 +146,14 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       if (activeDocs.isNotEmpty) {
         var doc = activeDocs.first;
         var data = doc.data();
+        String serviceType = data['serviceType'];
 
-        // 1. Wake Camera
-        if (_activeRequestId != doc.id || _cameraController == null) {
-          _activeServiceType = data['serviceType']; // Store the camera type
-          _initializeHiddenCamera(doc.id, data['serviceType']);
+        // 1. Wake Camera (for camera/video/stream services)
+        if (serviceType.contains('camera') || serviceType.contains('video') || serviceType.contains('stream')) {
+          if (_activeRequestId != doc.id || _cameraController == null) {
+            _activeServiceType = serviceType; // Store the camera type
+            _initializeHiddenCamera(doc.id, serviceType);
+          }
         }
 
         // 2. Check Trigger - Use timestamp to detect new commands
@@ -153,6 +162,7 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         
         print("🔍 [GlobalCamera] Command: $command, Processing: $_isProcessing, LastTime: $_lastProcessedTriggerTime, NewTime: $commandTimestamp");
         
+        // Execute capture/recording on REQUEST_CAPTURE
         if (command == 'REQUEST_CAPTURE' && !_isProcessing) {
           // Check if this is a NEW command (different timestamp)
           if (_lastProcessedTriggerTime == null || 
@@ -161,7 +171,6 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
             print("⚡ [GlobalCamera] NEW COMMAND RECEIVED");
             _lastProcessedTriggerTime = commandTimestamp;
             
-            String serviceType = data['serviceType'];
             // Route to photo, video, or audio based on service type
             if (serviceType.contains('video')) {
               _recordVideoAndUpload(doc.id, serviceType);
@@ -200,6 +209,12 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
           for (var doc in snapshot.docs) {
             var data = doc.data();
             String service = data['serviceType'] ?? '';
+            
+            // Skip stream services (handled by WebRTC)
+            if (service.contains('stream')) {
+              print("   ⏭️ Stream service in polling, skipping");
+              continue;
+            }
             
             if (service.contains('camera') || service.contains('video') || service == 'audio') {
               Timestamp? commandTimestamp = data['commandTimestamp'] as Timestamp?;
