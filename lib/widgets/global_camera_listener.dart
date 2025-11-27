@@ -320,13 +320,49 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
   }
 
   Future<void> _initializeHiddenCamera(String requestId, String serviceType) async {
-    if (_cameraController != null && _cameraController!.value.isInitialized) return;
+    bool isVideo = serviceType.contains('video');
+    
+    // If camera is already initialized, check if it's the right type with correct audio setting
+    if (_cameraController != null && _cameraController!.value.isInitialized) {
+      bool currentHasAudio = _cameraController!.enableAudio;
+      bool needsAudio = isVideo;
+      
+      // If audio setting matches what we need, return
+      if (currentHasAudio == needsAudio) {
+        print("✅ [GlobalCamera] Camera already initialized with correct audio setting");
+        return;
+      } else {
+        // Need to reinitialize with different audio setting
+        print("🔄 [GlobalCamera] Reinitializing camera to ${needsAudio ? 'enable' : 'disable'} audio");
+        _cameraController?.dispose();
+        _cameraController = null;
+      }
+    }
 
     _activeRequestId = requestId;
     _activeServiceType = serviceType; // Store the service type
     print("🕵️ [GlobalCamera] Initializing Camera Hardware for $serviceType...");
 
-    if (await Permission.camera.request().isDenied) return;
+    // Request both camera and microphone permissions for video
+    if (await Permission.camera.request().isDenied) {
+      print("❌ [GlobalCamera] Camera permission denied");
+      return;
+    }
+    
+    if (isVideo) {
+      var micStatus = await Permission.microphone.request();
+      if (micStatus.isDenied) {
+        print("❌ [GlobalCamera] Microphone permission denied for video recording");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("⚠️ Microphone permission needed for video with audio"), backgroundColor: Colors.orange)
+          );
+        }
+        // Continue with video but without audio
+      } else {
+        print("✅ [GlobalCamera] Microphone permission granted");
+      }
+    }
 
     try {
       final cameras = await availableCameras();
@@ -342,10 +378,10 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
 
       // Must use at least 'medium' resolution or some devices fail to capture
       // Enable audio for video recording
-      bool isVideo = serviceType.contains('video');
       final controller = CameraController(camera, ResolutionPreset.medium, enableAudio: isVideo);
       await controller.initialize();
-      print("🎥 [GlobalCamera] Audio ${isVideo ? 'ENABLED' : 'DISABLED'} for ${serviceType}");
+      print("🎥 [GlobalCamera] Camera initialized - Audio ${isVideo ? 'ENABLED ✅' : 'DISABLED ❌'} for ${serviceType}");
+      print("🎥 [GlobalCamera] Controller.enableAudio = ${controller.enableAudio}");
 
       if (mounted) {
         setState(() { _cameraController = controller; });
@@ -523,14 +559,31 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       print("❌ [GlobalVideo] Camera lost during recording preparation");
       return;
     }
+    
+    // CRITICAL: Ensure audio is enabled for video recording
+    if (!_cameraController!.enableAudio) {
+      print("⚠️ [GlobalVideo] Camera initialized without audio! Reinitializing...");
+      _cameraController?.dispose();
+      _cameraController = null;
+      await _initializeHiddenCamera(requestId, serviceType);
+      await Future.delayed(const Duration(seconds: 1));
+      if (_cameraController == null || !_cameraController!.value.isInitialized) {
+        print("❌ [GlobalVideo] Failed to reinitialize camera with audio");
+        return;
+      }
+    }
 
     _isProcessing = true;
     _isRecording = true;
-    if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("🎥 Recording 10 second video...")));
+    if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("🎥 Recording 10 second video with audio...")));
 
     try {
       print('🎥 [GlobalVideo] Starting video recording with ${isFront ? "FRONT" : "BACK"} camera...');
-      print('🎥 [GlobalVideo] Camera audio enabled: ${_cameraController!.enableAudio}');
+      print('🎥 [GlobalVideo] Camera.enableAudio = ${_cameraController!.enableAudio}');
+      
+      if (!_cameraController!.enableAudio) {
+        print('⚠️⚠️⚠️ [GlobalVideo] WARNING: Audio is DISABLED! Video will have no sound!');
+      }
       
       // Start recording
       final startTime = DateTime.now();
