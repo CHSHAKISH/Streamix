@@ -89,12 +89,14 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           );
           cameraId = frontCamera.name;
           facingMode = 'user'; // Front camera
+          print('📷 Using FRONT camera for front_stream');
         } else {
           final backCamera = cameras.firstWhere(
             (camera) => camera.lensDirection == CameraLensDirection.back,
           );
           cameraId = backCamera.name;
           facingMode = 'environment'; // Back camera
+          print('📷 Using BACK camera for back_stream');
         }
         print('📷 Selected camera: $cameraId, facing: $facingMode');
       } catch (e) {

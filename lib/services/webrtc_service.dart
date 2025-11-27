@@ -80,21 +80,26 @@ class WebRTCService {
           'noiseSuppression': true,
           'autoGainControl': true,
         },
-        'video': cameraId != null
-            ? {
-                'deviceId': cameraId,
-                'facingMode': facingMode ?? 'user',
-                'width': {'ideal': 1280},
-                'height': {'ideal': 720},
-              }
-            : {
-                'facingMode': facingMode ?? 'user',
-                'width': {'ideal': 1280},
-                'height': {'ideal': 720},
-              },
+        'video': {
+          'facingMode': facingMode ?? 'user',
+          'width': {'ideal': 1280},
+          'height': {'ideal': 720},
+        },
       };
+      
+      // Log the constraints for debugging
+      print('📹 Video constraints: ${mediaConstraints['video']}');
 
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
+      
+      // Verify which camera was actually selected
+      if (_localStream != null) {
+        final videoTracks = _localStream!.getVideoTracks();
+        if (videoTracks.isNotEmpty) {
+          print('✅ Video track selected: ${videoTracks[0].label}');
+          print('✅ Video track settings: ${videoTracks[0].getSettings()}');
+        }
+      }
       
       // Add tracks to peer connection
       _localStream!.getTracks().forEach((track) {
