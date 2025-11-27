@@ -330,9 +330,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       }
                     });
                     
-                    // Wait up to 20 seconds for video/audio (10s recording + 10s processing/upload) or 12s for photo
+                    // Wait up to 60 seconds for video (10s recording + 50s upload), 30s for audio, or 15s for photo
                     int waitCount = 0;
-                    int maxWait = (isVideo || isAudio) ? 40 : 24; // 40 * 500ms = 20s for video/audio, 24 * 500ms = 12s for photo
+                    int maxWait = isVideo ? 120 : (isAudio ? 60 : 30); // 120 * 500ms = 60s for video, 60 * 500ms = 30s for audio, 30 * 500ms = 15s for photo
                     while (!mediaReady && waitCount < maxWait) {
                       await Future.delayed(const Duration(milliseconds: 500));
                       waitCount++;

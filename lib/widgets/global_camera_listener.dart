@@ -473,6 +473,8 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
   }
 
   Future<void> _recordVideoAndUpload(String requestId, String serviceType) async {
+    print("🚀🎥 [GlobalVideo] _recordVideoAndUpload CALLED for serviceType: $serviceType, requestId: $requestId");
+    
     // Wait if camera is being disposed
     int waitCount = 0;
     while (_isDisposing && waitCount < 10) {
@@ -562,25 +564,49 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       print("🎥 [GlobalVideo] Video file size: ${(videoSize / 1024 / 1024).toStringAsFixed(2)} MB");
       print("🎥 [GlobalVideo] Uploading to Supabase...");
       
-      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("☁️ Uploading video...")));
+      if(mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("☁️ Uploading video..."), duration: Duration(seconds: 3)));
 
       String? url = await _supabaseStorage.uploadRequestMedia(requestId, File(video.path), 'mp4');
+      print("🎥 [GlobalVideo] Upload completed. URL: ${url ?? 'NULL'}");
 
       if (url != null) {
         print('🎥 [GlobalVideo] Upload successful! URL: $url');
-        print('🎥 [GlobalVideo] Updating Firestore...');
-        await _ticketService.completeCameraTask(requestId, url);
+        print('🎥 [GlobalVideo] Updating Firestore with remoteCommand=COMPLETED...');
+        
+        try {
+          await _ticketService.completeCameraTask(requestId, url);
+          print('✅ [GlobalVideo] Firestore updated successfully');
+        } catch (e) {
+          print('❌ [GlobalVideo] Firestore update error: $e');
+        }
         
         // Reset command to IDLE so next trigger can work
         print('🎥 [GlobalVideo] Resetting command to IDLE...');
-        await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
-          'remoteCommand': 'IDLE',
-        });
+        try {
+          await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+            'remoteCommand': 'IDLE',
+          });
+          print('✅ [GlobalVideo] Command reset to IDLE');
+        } catch (e) {
+          print('❌ [GlobalVideo] Reset command error: $e');
+        }
+        
         print("✅ [GlobalVideo] Complete! Video sent to User A");
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Video sent to User A")));
       } else {
         print('🔴 [GlobalVideo] Upload failed - URL is null');
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("❌ Upload failed"), backgroundColor: Colors.red));
+        
+        // Still mark as completed to prevent timeout, but with error indication
+        try {
+          await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+            'remoteCommand': 'COMPLETED',
+            'mediaUrl': '',
+            'error': 'Upload failed',
+          });
+        } catch (e) {
+          print('❌ [GlobalVideo] Error marking as failed: $e');
+        }
       }
     } catch (e) {
       print("❌ [GlobalVideo] Recording Error: $e");
