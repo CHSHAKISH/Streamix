@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 class TicketService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
+  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
 
   // --- 1. SEND COMMAND (User A) ---
   // "I want a photo. I am setting the flag to REQUEST_CAPTURE"

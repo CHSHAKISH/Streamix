@@ -23,7 +23,7 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TicketService _ticketService = TicketService();
-  final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
+  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
 
   void _showRequestDialog() {
     showDialog(
@@ -243,6 +243,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
                   // For stream services (front_stream, back_stream), open live viewer
                   if (service.contains('stream')) {
+                    // Mark the request as active and ask provider to start streaming
+                    try {
+                      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+                        'status': 'active',
+                        'remoteCommand': 'START_STREAM',
+                        'lastUpdated': FieldValue.serverTimestamp(),
+                      });
+                    } catch (e) {
+                      print('❌ Error setting START_STREAM: $e');
+                    }
+
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -398,6 +409,19 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     );
                     return;
+                  }
+
+                  // If this is a location request, signal the provider to start sharing
+                  if (service == 'location') {
+                    try {
+                      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+                        'status': 'active',
+                        'remoteCommand': 'START_LOCATION',
+                        'lastUpdated': FieldValue.serverTimestamp(),
+                      });
+                    } catch (e) {
+                      print('❌ Error setting START_LOCATION: $e');
+                    }
                   }
 
                   Navigator.push(

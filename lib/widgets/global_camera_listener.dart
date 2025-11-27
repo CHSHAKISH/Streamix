@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:streamix/services/supabase_storage_service.dart';
 import 'package:streamix/services/ticket_service.dart';
+import 'package:streamix/services/webrtc_service.dart';
+import 'package:streamix/services/location_service.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:path_provider/path_provider.dart' show getApplicationDocumentsDirectory;
 
@@ -26,6 +28,9 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
   CameraController? _cameraController;
   FlutterSoundRecorder? _audioRecorder;
   StreamSubscription? _requestSubscription;
+  WebRTCService? _webrtcService;
+  bool _isStreaming = false;
+  final LocationService _locationService = LocationService();
 
   String? _activeRequestId;
   String? _activeServiceType; // Store the camera type (front_camera/back_camera/front_video/back_video)
@@ -97,12 +102,13 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       }
     });
     
+    // Listen for accepted OR active sessions so we can auto-start flows
     _requestSubscription = FirebaseFirestore.instance
-        .collection('requests')
-        .where('peerUserId', isEqualTo: _currentUserId)
-        .where('status', isEqualTo: 'accepted')
-        .snapshots()
-        .listen((snapshot) {
+      .collection('requests')
+      .where('peerUserId', isEqualTo: _currentUserId)
+      .where('status', whereIn: ['accepted', 'active'])
+      .snapshots()
+      .listen((snapshot) {
 
       print("📬 [GlobalCamera] Received snapshot with ${snapshot.docs.length} documents");
       
@@ -114,10 +120,10 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         
         print("📄 [GlobalCamera] Checking doc ${doc.id}: serviceType=$service");
         
-        // Skip stream services (handled by WebRTC in ActiveSessionScreen)
+        // Stream services: start background WebRTC streamer when active/accepted
         if (service.contains('stream')) {
-          print("   ⏭️ Stream service, handled by WebRTC, skipping GlobalCamera");
-          return false;
+          print("   🎬 Stream service detected: $service");
+          return true; // keep in list so we can start streaming below
         }
         
         // Handle camera, video, and audio services
@@ -138,56 +144,158 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         print("   🔍 inTimeWindow=$inTimeWindow, command=$command, hasActiveCommand=$hasActiveCommand");
         
         // Allow if either in time window OR has active capture command
-        return inTimeWindow || hasActiveCommand;
+        return inTimeWindow || hasActiveCommand || service.contains('stream') || service == 'location';
       }).toList();
       
-      print("📊 [GlobalCamera] Found ${activeDocs.length} active camera/video requests");
+      print("📊 [GlobalCamera] Found ${activeDocs.length} active requests");
 
       if (activeDocs.isNotEmpty) {
-        var doc = activeDocs.first;
-        var data = doc.data();
-        String serviceType = data['serviceType'];
+        // Process all active requests
+        for (var doc in activeDocs) {
+          var data = doc.data();
+          String serviceType = data['serviceType'];
+          String requestId = doc.id;
 
-        // 1. Wake Camera (for camera/video/stream services)
-        if (serviceType.contains('camera') || serviceType.contains('video') || serviceType.contains('stream')) {
-          if (_activeRequestId != doc.id || _cameraController == null) {
-            _activeServiceType = serviceType; // Store the camera type
-            _initializeHiddenCamera(doc.id, serviceType);
-          }
-        }
-
-        // 2. Check Trigger - Use timestamp to detect new commands
-        String command = data['remoteCommand'] ?? 'IDLE';
-        Timestamp? commandTimestamp = data['commandTimestamp'] as Timestamp?;
-        
-        print("🔍 [GlobalCamera] Command: $command, Processing: $_isProcessing, LastTime: $_lastProcessedTriggerTime, NewTime: $commandTimestamp");
-        
-        // Execute capture/recording on REQUEST_CAPTURE
-        if (command == 'REQUEST_CAPTURE' && !_isProcessing) {
-          // Check if this is a NEW command (different timestamp)
-          if (_lastProcessedTriggerTime == null || 
-              commandTimestamp == null ||
-              commandTimestamp.millisecondsSinceEpoch != _lastProcessedTriggerTime!.millisecondsSinceEpoch) {
-            print("⚡ [GlobalCamera] NEW COMMAND RECEIVED");
-            _lastProcessedTriggerTime = commandTimestamp;
-            
-            // Route to photo, video, or audio based on service type
-            if (serviceType.contains('video')) {
-              _recordVideoAndUpload(doc.id, serviceType);
-            } else if (serviceType == 'audio') {
-              _recordAudioAndUpload(doc.id);
-            } else {
-              _takePictureAndUpload(doc.id, serviceType);
+          // STREAM: start/stop background WebRTC streamer
+          if (serviceType.contains('stream')) {
+            // If not already streaming for this request, start
+            if (!_isStreaming || _activeRequestId != requestId) {
+              _activeRequestId = requestId;
+              _activeServiceType = serviceType;
+              _startBackgroundStream(requestId, serviceType, data);
             }
-          } else {
-            print("⏭️ [GlobalCamera] Already processed this command");
+            continue; // Skip other processing for streams
+          }
+
+          // LOCATION: start background location sharing
+          if (serviceType == 'location') {
+            // Only start if within time window or status is active
+            DateTime startTime = (data['startTime'] as Timestamp).toDate();
+            DateTime endTime = (data['endTime'] as Timestamp).toDate();
+            final now = DateTime.now();
+            if ((now.isAfter(startTime) && now.isBefore(endTime)) || data['status'] == 'active') {
+              if (!_locationService.isSharing) {
+                // Best-effort: start background sharing
+                try {
+                  _locationService.startBackgroundSharing(ticketId: requestId, endTime: endTime);
+                  print('📡 [GlobalCamera] Location sharing started for $requestId');
+                } catch (e) {
+                  print('❌ [GlobalCamera] Failed to start location: $e');
+                }
+              }
+            }
+            continue; // Skip other processing for location
+          }
+
+          // CAMERA/VIDEO/AUDIO capture commands
+          if (serviceType.contains('camera') || serviceType.contains('video') || serviceType == 'audio') {
+            // Initialize camera if needed (for camera/video services, not audio)
+            if ((serviceType.contains('camera') || serviceType.contains('video'))) {
+              // Only re-initialize if this is a different request or different service type or camera not ready
+              bool needsInit = _activeRequestId != requestId || 
+                              _activeServiceType != serviceType || 
+                              _cameraController == null || 
+                              !_cameraController!.value.isInitialized;
+              
+              if (needsInit) {
+                print("🔄 [GlobalCamera] Need to initialize camera for $requestId ($serviceType)");
+                _activeRequestId = requestId;
+                _activeServiceType = serviceType;
+                _initializeHiddenCamera(requestId, serviceType);
+              }
+            }
+
+            // Check for capture trigger
+            String command = data['remoteCommand'] ?? 'IDLE';
+            Timestamp? commandTimestamp = data['commandTimestamp'] as Timestamp?;
+            
+            print("🔍 [GlobalCamera] Command: $command, Processing: $_isProcessing, LastTime: $_lastProcessedTriggerTime, NewTime: $commandTimestamp");
+            
+            // Execute capture/recording on REQUEST_CAPTURE
+            if (command == 'REQUEST_CAPTURE' && !_isProcessing) {
+              // Check if this is a NEW command (different timestamp)
+              if (_lastProcessedTriggerTime == null || 
+                  commandTimestamp == null ||
+                  commandTimestamp.millisecondsSinceEpoch != _lastProcessedTriggerTime!.millisecondsSinceEpoch) {
+                print("⚡ [GlobalCamera] NEW COMMAND RECEIVED for $requestId");
+                _lastProcessedTriggerTime = commandTimestamp;
+                
+                // Route to photo, video, or audio based on service type
+                if (serviceType.contains('video')) {
+                  _recordVideoAndUpload(requestId, serviceType);
+                } else if (serviceType == 'audio') {
+                  _recordAudioAndUpload(requestId);
+                } else {
+                  _takePictureAndUpload(requestId, serviceType);
+                }
+              } else {
+                print("⏭️ [GlobalCamera] Already processed this command");
+              }
+            }
           }
         }
-
       } else {
+        // No active docs: ensure we stop any background resources
         _disposeCamera();
+        if (_isStreaming) {
+          _stopBackgroundStream();
+        }
+        if (_locationService.isSharing) {
+          _locationService.stopSharing();
+        }
       }
     });
+  }
+
+  Future<void> _startBackgroundStream(String requestId, String serviceType, Map<String, dynamic> data) async {
+    if (_isStreaming) return;
+    print('🎬 [GlobalCamera] Starting background stream for $requestId ($serviceType)');
+
+    // Ensure camera & microphone permissions
+    try {
+      final camStatus = await Permission.camera.request();
+      final micStatus = await Permission.microphone.request();
+      if (!camStatus.isGranted || !micStatus.isGranted) {
+        print('❌ [GlobalCamera] Permissions not granted for streaming');
+        return;
+      }
+
+      // Choose facing mode
+      final isFront = serviceType.contains('front');
+      final facingMode = isFront ? 'user' : 'environment';
+
+      _webrtcService = WebRTCService(
+        requestId: requestId,
+        isInitiator: true,
+        onRemoteStream: null,
+        onConnectionStateChange: (state) {
+          print('🎬 [GlobalCamera] Stream state: $state');
+        },
+      );
+
+      await _webrtcService!.initialize(facingMode: facingMode);
+      await _webrtcService!.createOffer();
+
+      _isStreaming = true;
+      print('✅ [GlobalCamera] Background stream started');
+    } catch (e) {
+      print('❌ [GlobalCamera] Error starting background stream: $e');
+      _isStreaming = false;
+    }
+  }
+
+  Future<void> _stopBackgroundStream() async {
+    if (!_isStreaming) return;
+    print('🛑 [GlobalCamera] Stopping background stream');
+    try {
+      await _webrtcService?.dispose();
+    } catch (e) {
+      print('⚠️ [GlobalCamera] Error disposing webrtc: $e');
+    }
+    _webrtcService = null;
+    _isStreaming = false;
+    _activeRequestId = null;
+    _activeServiceType = null;
   }
 
   // Backup polling mechanism - checks Firestore every 3 seconds for pending commands

@@ -4,9 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:streamix/screens/session/active_session_screen.dart'; // Camera, Video & Audio
-// REMOVED STREAM IMPORT
-import 'package:streamix/services/location_service.dart';             // Location
+import 'package:streamix/services/location_service.dart';
 import 'package:streamix/services/ticket_service.dart';
 import 'package:streamix/services/notification_service.dart';
 
@@ -21,7 +19,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
   final TicketService _ticketService = TicketService();
   final LocationService _locationService = LocationService();
   final NotificationService _notificationService = NotificationService();
-  final String _currentUserId = FirebaseAuth.instance.currentUser!.uid;
+  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
   Timer? _timer;
   StreamSubscription? _newRequestSubscription;
   final Set<String> _shownRequests = {};
@@ -80,18 +78,6 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
     _timer?.cancel();
     _newRequestSubscription?.cancel();
     super.dispose();
-  }
-
-  void _openSession(String requestId, String service, DateTime start, DateTime end) {
-    // Route to Active Session Screen for camera, video, audio, and stream services
-    if (service.contains('video') || service.contains('camera') || service == 'audio' || service.contains('stream')) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(
-          requestId: requestId,
-          serviceType: service,
-          scheduledStartTime: start,
-          scheduledEndTime: end
-      )));
-    }
   }
 
   @override
@@ -159,8 +145,17 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                               ElevatedButton(
                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                                 onPressed: () async {
-                                  if (isLocation) await Permission.location.request();
-                                  else await Permission.camera.request();
+                                  // Request appropriate permissions based on service type
+                                  if (isLocation) {
+                                    await Permission.location.request();
+                                  } else if (service == 'audio') {
+                                    await Permission.microphone.request();
+                                  } else if (service.contains('video')) {
+                                    await Permission.camera.request();
+                                    await Permission.microphone.request();
+                                  } else {
+                                    await Permission.camera.request();
+                                  }
 
                                   await _ticketService.updateRequestStatus(requestId, true);
                                   if (isLocation && isTimeWindowOpen) {
@@ -185,13 +180,39 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                           ),
 
                         if (isMedia && (isAccepted || isCompleted) && isTimeWindowOpen)
+                          // Show info message instead of button - automatic capture is handled by GlobalCameraHandler
                           Align(
                             alignment: Alignment.centerRight,
-                            child: ElevatedButton.icon(
-                              icon: const Icon(Icons.videocam),
-                              label: const Text("OPEN SESSION"),
-                              style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
-                              onPressed: () => _openSession(requestId, service, startTime, endTime),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.green.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.green.shade300),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    service.contains('video') ? Icons.videocam : service == 'audio' ? Icons.mic : Icons.camera_alt,
+                                    color: Colors.green.shade700,
+                                    size: 20,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    service.contains('video')
+                                        ? 'Video will record automatically when requester views'
+                                        : service == 'audio'
+                                            ? 'Audio will record automatically when requester views'
+                                            : 'Photo will capture automatically when requester views',
+                                    style: TextStyle(
+                                      color: Colors.green.shade700,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
 

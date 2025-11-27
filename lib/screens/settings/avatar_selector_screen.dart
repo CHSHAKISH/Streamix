@@ -22,8 +22,10 @@ class _AvatarSelectorScreenState extends State<AvatarSelectorScreen> {
   ];
 
   Future<void> _saveAvatar(String avatarValue) async {
-    final uid = FirebaseAuth.instance.currentUser!.uid;
-    await FirebaseFirestore.instance.collection('users').doc(uid).update({
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    
+    await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
       'avatar': avatarValue,
     });
     if (mounted) {
@@ -41,10 +43,15 @@ class _AvatarSelectorScreenState extends State<AvatarSelectorScreen> {
     setState(() => _isUploading = true);
 
     try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        throw Exception('User not logged in');
+      }
+      
       // 1. Upload to Supabase bucket 'profile_pics'
       // (Make sure you create a bucket named 'profile_pics' in Supabase and set it to Public)
       String? url = await _supabaseService.uploadRequestMedia(
-        "profile_${FirebaseAuth.instance.currentUser!.uid}", // Unique ID
+        "profile_${user.uid}", // Unique ID
         File(image.path),
         'jpg',
       );

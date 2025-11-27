@@ -22,9 +22,9 @@ class WebRTCService {
     this.onConnectionStateChange,
   });
 
-  Future<void> initialize({String? cameraId}) async {
+  Future<void> initialize({String? cameraId, String? facingMode}) async {
     try {
-      print('🌐 WebRTC initializing... isInitiator: $isInitiator');
+      print('🌐 WebRTC initializing... isInitiator: $isInitiator, facingMode: $facingMode');
       
       // Create peer connection
       _peerConnection = await createPeerConnection({
@@ -57,7 +57,7 @@ class WebRTCService {
 
       // If broadcaster (User B), create local stream
       if (isInitiator) {
-        await _createLocalStream(cameraId: cameraId);
+        await _createLocalStream(cameraId: cameraId, facingMode: facingMode);
       }
 
       // Listen for signaling
@@ -70,15 +70,22 @@ class WebRTCService {
     }
   }
 
-  Future<void> _createLocalStream({String? cameraId}) async {
+  Future<void> _createLocalStream({String? cameraId, String? facingMode}) async {
     try {
-      print('📹 Creating local stream with camera: $cameraId');
+      print('📹 Creating local stream with camera: $cameraId, facingMode: $facingMode');
       
       final Map<String, dynamic> mediaConstraints = {
-        'audio': true,
-        'video': cameraId != null
-            ? {'deviceId': cameraId, 'facingMode': 'user'}
-            : {'facingMode': 'user'},
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true,
+          'autoGainControl': true,
+        },
+        'video': {
+          if (cameraId != null) 'deviceId': cameraId,
+          'facingMode': facingMode ?? 'user',
+          'width': {'ideal': 1280},
+          'height': {'ideal': 720},
+        },
       };
 
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
