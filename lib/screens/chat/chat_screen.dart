@@ -23,7 +23,13 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final TicketService _ticketService = TicketService();
-  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
+  late final String _currentUserId;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+  }
 
   void _showRequestDialog() {
     showDialog(
@@ -243,17 +249,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
                   // For stream services (front_stream, back_stream), open live viewer
                   if (service.contains('stream')) {
-                    // Mark the request as active and ask provider to start streaming
-                    try {
-                      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
-                        'status': 'active',
-                        'remoteCommand': 'START_STREAM',
-                        'lastUpdated': FieldValue.serverTimestamp(),
-                      });
-                    } catch (e) {
-                      print('❌ Error setting START_STREAM: $e');
-                    }
-
+                    // Trigger User B to start streaming
+                    await FirebaseFirestore.instance
+                        .collection('requests')
+                        .doc(requestId)
+                        .update({
+                      'remoteCommand': 'START_STREAM',
+                      'commandTimestamp': FieldValue.serverTimestamp(),
+                    });
+                    
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -268,6 +272,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
                   // For camera, video, and audio services, trigger capture/recording and wait for media
                   if (service.contains('camera') || service.contains('video') || service == 'audio') {
+                    print("📸 [ChatScreen] Starting capture/recording for service: $service, requestId: $requestId");
+                    
                     bool isVideo = service.contains('video');
                     bool isAudio = service == 'audio';
                     
@@ -299,7 +305,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     }
                     
                     // Trigger the capture/recording
+                    print("🚀 [ChatScreen] Calling sendCameraTrigger for requestId: $requestId");
                     await _ticketService.sendCameraTrigger(requestId);
+                    print("✅ [ChatScreen] sendCameraTrigger completed");
                     
                     // Wait for media to be uploaded (listen to Firestore)
                     bool mediaReady = false;
@@ -409,19 +417,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     );
                     return;
-                  }
-
-                  // If this is a location request, signal the provider to start sharing
-                  if (service == 'location') {
-                    try {
-                      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
-                        'status': 'active',
-                        'remoteCommand': 'START_LOCATION',
-                        'lastUpdated': FieldValue.serverTimestamp(),
-                      });
-                    } catch (e) {
-                      print('❌ Error setting START_LOCATION: $e');
-                    }
                   }
 
                   Navigator.push(

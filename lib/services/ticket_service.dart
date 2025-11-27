@@ -1,12 +1,7 @@
-import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/services.dart';
-import 'package:googleapis_auth/auth_io.dart';
-import 'package:http/http.dart' as http;
 
 class TicketService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
 
@@ -41,8 +36,6 @@ class TicketService {
   // --- EXISTING CORE METHODS ---
   // (Keep Notification logic & other CRUD methods exactly as they were)
   Future<void> _sendNotificationV1({required String targetUserId, required String title, required String body, required String type}) async { /* ... */ }
-  Future<String> _getAccessToken() async { /* ... */ return ""; }
-  Future<String> _getProjectId() async { /* ... */ return ""; }
 
   Future<String> createScheduledRequest({required String peerUserId, required String serviceType, required Timestamp startTime, required Timestamp endTime}) async {
     try {

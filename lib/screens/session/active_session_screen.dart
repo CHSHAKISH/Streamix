@@ -40,10 +40,29 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     super.initState();
     _checkSchedule();
     
-    // Initialize streaming if service is stream type
+    // Listen for stream start command
     if (widget.serviceType.contains('stream')) {
-      _initializeStreaming();
+      _listenForStreamCommand();
     }
+  }
+  
+  void _listenForStreamCommand() {
+    FirebaseFirestore.instance
+        .collection('requests')
+        .doc(widget.requestId)
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.exists) {
+        final data = snapshot.data();
+        if (data != null) {
+          final command = data['remoteCommand'];
+          if (command == 'START_STREAM' && !_isStreamInitialized) {
+            print('📡 Received START_STREAM command from User A');
+            _initializeStreaming();
+          }
+        }
+      }
+    });
   }
 
   Future<void> _initializeStreaming() async {
@@ -54,8 +73,9 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
       await _localRenderer.initialize();
       print('✅ Local renderer initialized');
       
-      // Get camera ID based on service type
+      // Get camera ID and facing mode based on service type
       String? cameraId;
+      String facingMode;
       try {
         final cameras = await availableCameras();
         print('📷 Available cameras: ${cameras.length}');
@@ -68,15 +88,18 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
             (camera) => camera.lensDirection == CameraLensDirection.front,
           );
           cameraId = frontCamera.name;
+          facingMode = 'user'; // Front camera
         } else {
           final backCamera = cameras.firstWhere(
             (camera) => camera.lensDirection == CameraLensDirection.back,
           );
           cameraId = backCamera.name;
+          facingMode = 'environment'; // Back camera
         }
-        print('📷 Selected camera: $cameraId');
+        print('📷 Selected camera: $cameraId, facing: $facingMode');
       } catch (e) {
         print('⚠️ Could not get specific camera, using default: $e');
+        facingMode = widget.serviceType == 'front_stream' ? 'user' : 'environment';
       }
       
       // Create WebRTC service as broadcaster (initiator)
@@ -89,7 +112,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         },
       );
 
-      await _webrtcService!.initialize(cameraId: cameraId);
+      await _webrtcService!.initialize(cameraId: cameraId, facingMode: facingMode);
       print('✅ WebRTC service initialized');
       
       // Set local stream to renderer
@@ -225,8 +248,13 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           
           // For stream services, show different message
           if (isStream) {
-            processingText = "User A is viewing your live stream...";
-            successText = "Stream Active";
+            if (_isStreamInitialized) {
+              processingText = "User A is viewing your live stream...";
+              successText = "Stream Active";
+            } else {
+              processingText = "Waiting for User A to start viewing...";
+              successText = "Stream Ready";
+            }
           }
           
           String detailText = isVideo

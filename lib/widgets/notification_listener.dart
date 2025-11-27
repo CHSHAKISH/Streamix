@@ -14,7 +14,7 @@ class InAppNotificationListener extends StatefulWidget {
 }
 
 class _InAppNotificationListenerState extends State<InAppNotificationListener> {
-  String? _currentUserId;
+  String get _currentUserId => FirebaseAuth.instance.currentUser?.uid ?? '';
   final NotificationService _notificationService = NotificationService();
   StreamSubscription? _requestSubscription;
   final Set<String> _processedRequests = {};
@@ -22,15 +22,12 @@ class _InAppNotificationListenerState extends State<InAppNotificationListener> {
   @override
   void initState() {
     super.initState();
-    _currentUserId = FirebaseAuth.instance.currentUser?.uid;
-    if (_currentUserId != null) {
+    if (_currentUserId.isNotEmpty) {
       _listenToRequests();
     }
   }
 
   void _listenToRequests() {
-    if (_currentUserId == null) return;
-    
     // Listen to requests where current user is the requester (User A)
     // to get notified when requests are accepted/rejected
     _requestSubscription = FirebaseFirestore.instance

@@ -35,6 +35,9 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
       // Initialize video renderer
       await _remoteRenderer.initialize();
       
+      // Configure audio output
+      await _remoteRenderer.audioOutput('speaker');
+      
       // Create WebRTC service as viewer (not initiator)
       _webrtcService = WebRTCService(
         requestId: widget.requestId,
@@ -46,6 +49,13 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
             _isConnecting = false;
             _connectionStatus = 'Connected';
           });
+          
+          // Ensure audio tracks are enabled
+          final audioTracks = stream.getAudioTracks();
+          for (var track in audioTracks) {
+            track.enabled = true;
+            print('🔊 Audio track enabled: ${track.id}');
+          }
         },
         onConnectionStateChange: (state) {
           setState(() {

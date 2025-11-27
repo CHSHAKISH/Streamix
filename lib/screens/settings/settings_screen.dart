@@ -124,10 +124,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       try {
                         // Re-auth first
                         AuthCredential credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: passController.text);
-                        await _currentUser!.reauthenticateWithCredential(credential);
+                        await _currentUser.reauthenticateWithCredential(credential);
                         // Update Email
-                        await _currentUser!.verifyBeforeUpdateEmail(emailController.text);
-                        await FirebaseFirestore.instance.collection('users').doc(_currentUser!.uid).update({'email': emailController.text});
+                        await _currentUser.verifyBeforeUpdateEmail(emailController.text);
+                        await FirebaseFirestore.instance.collection('users').doc(_currentUser.uid).update({'email': emailController.text});
 
                         if (mounted) {
                           Navigator.pop(context);
@@ -221,9 +221,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       return;
                     }
                     try {
-                      AuthCredential credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: currentController.text);
-                      await _currentUser!.reauthenticateWithCredential(credential);
-                      await _currentUser!.updatePassword(newController.text);
+                      final credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: currentController.text);
+                      await _currentUser.reauthenticateWithCredential(credential);
+                      await _currentUser.updatePassword(newController.text);
                       if (mounted) {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Password changed successfully!")));
@@ -284,10 +284,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ElevatedButton(
                   onPressed: () async {
                     try {
-                      AuthCredential credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: passController.text);
-                      await _currentUser!.reauthenticateWithCredential(credential);
-                      await FirebaseFirestore.instance.collection('users').doc(_currentUser!.uid).delete();
-                      await _currentUser!.delete();
+                      final credential = EmailAuthProvider.credential(email: _currentUser!.email!, password: passController.text);
+                      await _currentUser.reauthenticateWithCredential(credential);
+                      await FirebaseFirestore.instance.collection('users').doc(_currentUser.uid).delete();
+                      await _currentUser.delete();
                       // App will likely restart or go to login due to auth listener
                     } catch (e) {
                       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
