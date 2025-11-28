@@ -168,6 +168,24 @@ class WebRTCService {
   Future<void> createOffer() async {
     try {
       print('📤 Creating offer...');
+      
+      // Clear old signaling data first to prevent conflicts
+      final signalingDoc = FirebaseFirestore.instance
+          .collection('webrtc_signaling')
+          .doc(requestId);
+      
+      try {
+        print('🗑️ Clearing old signaling data...');
+        final candidatesSnapshot = await signalingDoc.collection('candidates').get();
+        for (var doc in candidatesSnapshot.docs) {
+          await doc.reference.delete();
+        }
+        await signalingDoc.delete();
+        print('✅ Old signaling data cleared');
+      } catch (e) {
+        print('⚠️ No old signaling data to clear: $e');
+      }
+      
       final offer = await _peerConnection!.createOffer();
       await _peerConnection!.setLocalDescription(offer);
 

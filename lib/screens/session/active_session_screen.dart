@@ -40,29 +40,17 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     super.initState();
     _checkSchedule();
     
-    // Listen for stream start command
+    // For stream services, initialize immediately when User B accepts
     if (widget.serviceType.contains('stream')) {
-      _listenForStreamCommand();
+      _initializeStreamingImmediately();
     }
   }
   
-  void _listenForStreamCommand() {
-    FirebaseFirestore.instance
-        .collection('requests')
-        .doc(widget.requestId)
-        .snapshots()
-        .listen((snapshot) {
-      if (snapshot.exists) {
-        final data = snapshot.data();
-        if (data != null) {
-          final command = data['remoteCommand'];
-          if (command == 'START_STREAM' && !_isStreamInitialized) {
-            print('📡 Received START_STREAM command from User A');
-            _initializeStreaming();
-          }
-        }
-      }
-    });
+  Future<void> _initializeStreamingImmediately() async {
+    // Small delay to ensure UI is ready
+    await Future.delayed(const Duration(milliseconds: 500));
+    print('🚀 Auto-initializing stream for ${widget.serviceType}...');
+    await _initializeStreaming();
   }
 
   Future<void> _initializeStreaming() async {
@@ -123,16 +111,24 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         setState(() {
           _localRenderer.srcObject = _webrtcService!.localStream;
           _isStreamInitialized = true;
+          _statusMessage = "🎥 Stream Ready - Waiting for User A to connect";
         });
         print('✅ Local stream set to renderer');
       } else {
         print('⚠️ Local stream is null!');
+        setState(() {
+          _statusMessage = "Failed to create local stream";
+        });
+        return;
       }
       
       // Create offer for User A to connect
       await _webrtcService!.createOffer();
       
       print('✅ Streaming initialized and offer sent');
+      setState(() {
+        _statusMessage = "📡 Broadcasting - User A can now view the stream";
+      });
     } catch (e) {
       print('❌ Error initializing streaming: $e');
       print('Stack trace: ${StackTrace.current}');

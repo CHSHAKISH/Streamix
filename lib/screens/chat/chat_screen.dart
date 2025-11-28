@@ -249,15 +249,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
                   // For stream services (front_stream, back_stream), open live viewer
                   if (service.contains('stream')) {
-                    // Trigger User B to start streaming
-                    await FirebaseFirestore.instance
-                        .collection('requests')
-                        .doc(requestId)
-                        .update({
-                      'remoteCommand': 'START_STREAM',
-                      'commandTimestamp': FieldValue.serverTimestamp(),
-                    });
+                    // Check if already viewing (prevent multiple screens)
+                    if (ModalRoute.of(context)?.isCurrent == false) {
+                      print('⚠️ Already navigated, skipping duplicate navigation');
+                      return;
+                    }
                     
+                    print('📡 Opening live stream viewer for $service');
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -330,9 +328,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       }
                     });
                     
-                    // Wait up to 60 seconds for video (10s recording + 50s upload), 30s for audio, or 15s for photo
+                    // Wait up to 90 seconds for video (10s recording + 80s upload), 45s for audio, or 30s for photo
                     int waitCount = 0;
-                    int maxWait = isVideo ? 120 : (isAudio ? 60 : 30); // 120 * 500ms = 60s for video, 60 * 500ms = 30s for audio, 30 * 500ms = 15s for photo
+                    int maxWait = isVideo ? 180 : (isAudio ? 90 : 60); // 180 * 500ms = 90s for video, 90 * 500ms = 45s for audio, 60 * 500ms = 30s for photo
                     while (!mediaReady && waitCount < maxWait) {
                       await Future.delayed(const Duration(milliseconds: 500));
                       waitCount++;

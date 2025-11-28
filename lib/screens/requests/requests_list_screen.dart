@@ -162,8 +162,19 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                               ElevatedButton(
                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                                 onPressed: () async {
-                                  if (isLocation) await Permission.location.request();
-                                  else await Permission.camera.request();
+                                  // Request appropriate permissions
+                                  if (isLocation) {
+                                    await Permission.location.request();
+                                  } else if (service.contains('camera') || service.contains('video') || service.contains('stream')) {
+                                    // Request camera permission for camera, video, and stream services
+                                    await Permission.camera.request();
+                                    // Also request microphone for video and stream services
+                                    if (service.contains('video') || service.contains('stream')) {
+                                      await Permission.microphone.request();
+                                    }
+                                  } else if (service == 'audio') {
+                                    await Permission.microphone.request();
+                                  }
 
                                   await _ticketService.updateRequestStatus(requestId, true);
                                   
