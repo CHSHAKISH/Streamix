@@ -198,9 +198,30 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     } catch (e) {
       print('❌ Error initializing streaming: $e');
       print('Stack trace: ${StackTrace.current}');
+      
+      // Update Firestore with error so viewer can see it
+      try {
+        await FirebaseFirestore.instance.collection('webrtc_signaling').doc(widget.requestId).set({
+          'broadcasterError': e.toString(),
+          'broadcasterErrorTime': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (firestoreError) {
+        print('❌ Failed to update Firestore with error: $firestoreError');
+      }
+      
       setState(() {
         _statusMessage = "Stream initialization failed: $e";
       });
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Stream error: Check camera permissions'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     }
   }
 

@@ -45,6 +45,24 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
       
       print('📡 Signaled broadcaster that viewer is ready');
       
+      // Check if broadcaster reported any errors
+      final signalingDoc = await FirebaseFirestore.instance
+          .collection('webrtc_signaling')
+          .doc(widget.requestId)
+          .get();
+      
+      if (signalingDoc.exists) {
+        final data = signalingDoc.data();
+        if (data != null && data['broadcasterError'] != null) {
+          print('⚠️ Broadcaster reported error: ${data['broadcasterError']}');
+          setState(() {
+            _isConnecting = false;
+            _connectionStatus = 'Broadcaster Error: ${data['broadcasterError']}';
+          });
+          return;
+        }
+      }
+      
       // Initialize video renderer
       await _remoteRenderer.initialize();
       
@@ -62,17 +80,29 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
         isInitiator: false, // User A is the viewer
         onRemoteStream: (stream) {
           print('📺 Remote stream received, setting up renderer');
+          final audioTracks = stream.getAudioTracks();
+          final videoTracks = stream.getVideoTracks();
+          print('📊 Remote stream tracks - audio: ${audioTracks.length}, video: ${videoTracks.length}');
+          for (var a in audioTracks) {
+            print('🔊 Audio track found: id=${a.id}, enabled=${a.enabled}');
+            try {
+              a.enabled = true;
+            } catch (e) {
+              print('⚠️ Failed to enable audio track ${a.id}: $e');
+            }
+          }
+          for (var v in videoTracks) {
+            print('🎞️ Video track found: id=${v.id}, kind=${v.kind}');
+          }
+
           setState(() {
             _remoteRenderer.srcObject = stream;
             _isConnecting = false;
             _connectionStatus = 'Connected';
           });
-          
-          // Ensure audio tracks are enabled
-          final audioTracks = stream.getAudioTracks();
-          for (var track in audioTracks) {
-            track.enabled = true;
-            print('🔊 Audio track enabled: ${track.id}');
+
+          if (videoTracks.isEmpty) {
+            print('⚠️ Remote stream has no video tracks - viewer will see a black/white screen');
           }
         },
         onConnectionStateChange: (state) {

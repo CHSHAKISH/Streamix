@@ -42,8 +42,48 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
     WidgetsBinding.instance.addObserver(this);
     if (_currentUserId.isNotEmpty) {
       _initAudioRecorder();
+      _ensureRuntimePermissions(); // Request camera/mic early on startup to avoid missing-permission issues in release APKs
       _listenForActiveRequests();
       _startBackupPolling(); // Start backup polling every 3 seconds
+    }
+  }
+
+  /// Request camera and microphone permissions at startup so release APKs
+  /// prompt the user and we can detect permanently denied state early.
+  Future<void> _ensureRuntimePermissions() async {
+    try {
+      print('🔐 [GlobalCamera] Ensuring runtime permissions for camera/microphone');
+
+      final cameraStatus = await Permission.camera.status;
+      if (!cameraStatus.isGranted) {
+        final result = await Permission.camera.request();
+        print('🔐 [GlobalCamera] Camera permission result: $result');
+        if (result.isPermanentlyDenied) {
+          // Guide user to settings
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Camera permission permanently denied. Please enable it in app settings.'),
+              backgroundColor: Colors.orange,
+            ));
+          }
+        }
+      }
+
+      final micStatus = await Permission.microphone.status;
+      if (!micStatus.isGranted) {
+        final mres = await Permission.microphone.request();
+        print('🔐 [GlobalCamera] Microphone permission result: $mres');
+        if (mres.isPermanentlyDenied) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Microphone permission permanently denied. Please enable it in app settings.'),
+              backgroundColor: Colors.orange,
+            ));
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ [GlobalCamera] Error while requesting runtime permissions: $e');
     }
   }
 
@@ -344,15 +384,25 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
     print("🕵️ [GlobalCamera] Initializing Camera Hardware for $serviceType...");
 
     // Request both camera and microphone permissions for video
-    if (await Permission.camera.request().isDenied) {
-      print("❌ [GlobalCamera] Camera permission denied");
+    final cameraPermission = await Permission.camera.request();
+    print("🔐 [GlobalCamera] Camera permission status: $cameraPermission");
+    if (cameraPermission.isDenied || cameraPermission.isPermanentlyDenied) {
+      print("❌ [GlobalCamera] Camera permission denied or permanently denied");
+      await _updateFirestoreError(requestId, 'Camera permission denied. Please enable in app settings.');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("❌ Camera permission denied. Enable in Settings."), backgroundColor: Colors.red)
+        );
+      }
       return;
     }
     
     if (isVideo) {
       var micStatus = await Permission.microphone.request();
-      if (micStatus.isDenied) {
+      print("🔐 [GlobalCamera] Microphone permission status: $micStatus");
+      if (micStatus.isDenied || micStatus.isPermanentlyDenied) {
         print("❌ [GlobalCamera] Microphone permission denied for video recording");
+        await _updateFirestoreError(requestId, 'Microphone permission denied. Video will have no audio.');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text("⚠️ Microphone permission needed for video with audio"), backgroundColor: Colors.orange)
@@ -366,6 +416,13 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
 
     try {
       final cameras = await availableCameras();
+      print("🎥 [GlobalCamera] Found ${cameras.length} cameras on device");
+      if (cameras.isEmpty) {
+        print("❌ [GlobalCamera] No cameras available on device");
+        await _updateFirestoreError(requestId, 'No cameras available on this device.');
+        return;
+      }
+      
       final isFront = serviceType.contains('front');
       print("🎥 [GlobalCamera] Looking for ${isFront ? 'FRONT' : 'BACK'} camera...");
       
@@ -379,9 +436,11 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       // Must use at least 'medium' resolution or some devices fail to capture
       // Enable audio for video recording
       final controller = CameraController(camera, ResolutionPreset.medium, enableAudio: isVideo);
+      print("🎥 [GlobalCamera] Calling controller.initialize()...");
       await controller.initialize();
-      print("🎥 [GlobalCamera] Camera initialized - Audio ${isVideo ? 'ENABLED ✅' : 'DISABLED ❌'} for ${serviceType}");
+      print("🎥 [GlobalCamera] Camera initialized successfully - Audio ${isVideo ? 'ENABLED ✅' : 'DISABLED ❌'} for ${serviceType}");
       print("🎥 [GlobalCamera] Controller.enableAudio = ${controller.enableAudio}");
+      print("🎥 [GlobalCamera] Controller.value.isInitialized = ${controller.value.isInitialized}");
 
       if (mounted) {
         setState(() { _cameraController = controller; });
@@ -393,8 +452,28 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
           duration: const Duration(seconds: 2),
         ));
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
       print("❌ [GlobalCamera] Hardware Error: $e");
+      print("❌ [GlobalCamera] Stack trace: $stackTrace");
+      await _updateFirestoreError(requestId, 'Camera initialization failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("❌ Camera error: $e"), backgroundColor: Colors.red)
+        );
+      }
+    }
+  }
+
+  /// Update Firestore with error message so requester can see what went wrong
+  Future<void> _updateFirestoreError(String requestId, String errorMessage) async {
+    try {
+      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+        'errorMessage': errorMessage,
+        'lastError': FieldValue.serverTimestamp(),
+      });
+      print("📝 [GlobalCamera] Updated Firestore with error: $errorMessage");
+    } catch (e) {
+      print("❌ [GlobalCamera] Failed to update Firestore error: $e");
     }
   }
 

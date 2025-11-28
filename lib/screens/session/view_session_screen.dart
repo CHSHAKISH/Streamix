@@ -44,10 +44,12 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
           String? mediaUrl = data['mediaUrl'];
           String command = data['remoteCommand'] ?? 'IDLE';
           String status = data['status'] ?? '';
+          String? errorMessage = data['errorMessage'];
           
           print('🔍 [ViewSession] mediaUrl: $mediaUrl');
           print('🔍 [ViewSession] command: $command');
           print('🔍 [ViewSession] status: $status');
+          print('🔍 [ViewSession] errorMessage: $errorMessage');
           
           // Check if User B stopped sharing
           if (status == 'stopped_by_provider' || command == 'STOPPED') {
@@ -124,6 +126,24 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
                                 const Text(
                                   'Capturing photo from User B...',
                                   style: TextStyle(color: Colors.white70, fontSize: 16),
+                                ),
+                              ] else if (errorMessage != null && errorMessage.isNotEmpty) ...[
+                                const Icon(Icons.error_outline, size: 80, color: Colors.red),
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Error:\n$errorMessage',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.red, fontSize: 16),
+                                ),
+                                const SizedBox(height: 20),
+                                ElevatedButton.icon(
+                                  icon: const Icon(Icons.settings),
+                                  label: const Text('Check Settings'),
+                                  onPressed: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Ask User B to enable Camera permissions in Settings'))
+                                    );
+                                  },
                                 ),
                               ] else ...[
                                 const Icon(Icons.photo_camera, size: 80, color: Colors.grey),
@@ -205,6 +225,24 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
                                 const Text(
                                   'Recording 10s video from User B...',
                                   style: TextStyle(color: Colors.white70, fontSize: 16),
+                                ),
+                              ] else if (errorMessage != null && errorMessage.isNotEmpty) ...[
+                                const Icon(Icons.error_outline, size: 80, color: Colors.red),
+                                const SizedBox(height: 20),
+                                Text(
+                                  'Error:\n$errorMessage',
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.red, fontSize: 16),
+                                ),
+                                const SizedBox(height: 20),
+                                ElevatedButton.icon(
+                                  icon: const Icon(Icons.settings),
+                                  label: const Text('Check Settings'),
+                                  onPressed: () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text('Ask User B to enable Camera and Microphone permissions'))
+                                    );
+                                  },
                                 ),
                               ] else ...[
                                 const Icon(Icons.videocam, size: 80, color: Colors.grey),
