@@ -9,6 +9,7 @@ class WebRTCService {
   StreamSubscription? _offerSubscription;
   StreamSubscription? _answerSubscription;
   StreamSubscription? _candidateSubscription;
+  bool _hasProcessedOffer = false; // Track if viewer has processed an offer
 
   final String requestId;
   final bool isInitiator; // true for User B (broadcaster), false for User A (viewer)
@@ -120,24 +121,54 @@ class WebRTCService {
         .doc(requestId);
 
     if (isInitiator) {
+      print('👂 Broadcaster listening for answers...');
       // User B listens for answer from User A
       _answerSubscription = signalingDoc.snapshots().listen((snapshot) async {
+        print('📬 Broadcaster received snapshot - exists: ${snapshot.exists}');
         if (snapshot.exists) {
           final data = snapshot.data();
+          print('📬 Broadcaster data: ${data?.keys}');
           if (data != null && data['answer'] != null) {
-            print('📩 Received answer');
-            await _handleAnswer(data['answer']);
+            // Only process answer if we're in the right state
+            print('🔍 Broadcaster state: ${_peerConnection?.signalingState}');
+            if (_peerConnection?.signalingState == RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
+              print('📩 Received answer, processing...');
+              await _handleAnswer(data['answer']);
+            } else {
+              print('⏭️ Skipping answer - wrong state: ${_peerConnection?.signalingState}');
+            }
           }
         }
       });
     } else {
+      print('👂 Viewer listening for offers...');
       // User A listens for offer from User B
       _offerSubscription = signalingDoc.snapshots().listen((snapshot) async {
+        print('📬 Viewer received snapshot - exists: ${snapshot.exists}');
         if (snapshot.exists) {
           final data = snapshot.data();
+          print('📬 Viewer data: ${data?.keys}');
           if (data != null && data['offer'] != null) {
-            print('📩 Received offer');
-            await _handleOffer(data['offer']);
+            // Check if we've already processed an offer
+            if (_hasProcessedOffer) {
+              print('⏭️ Already processed an offer, skipping');
+              return;
+            }
+            
+            final currentState = _peerConnection?.signalingState;
+            print('🔍 Viewer state: $currentState');
+            
+            // Process offer if in stable state or if state is null (connection just initialized)
+            if (currentState == RTCSignalingState.RTCSignalingStateStable || 
+                currentState == null) {
+              print('📩 Received offer, processing...');
+              _hasProcessedOffer = true; // Mark as processed
+              await _handleOffer(data['offer']);
+            } else {
+              print('⏭️ Skipping offer - wrong state: $currentState');
+            }
+          } else {
+            print('⚠️ Viewer: No offer in snapshot yet');
           }
         }
       });
@@ -169,23 +200,6 @@ class WebRTCService {
     try {
       print('📤 Creating offer...');
       
-      // Clear old signaling data first to prevent conflicts
-      final signalingDoc = FirebaseFirestore.instance
-          .collection('webrtc_signaling')
-          .doc(requestId);
-      
-      try {
-        print('🗑️ Clearing old signaling data...');
-        final candidatesSnapshot = await signalingDoc.collection('candidates').get();
-        for (var doc in candidatesSnapshot.docs) {
-          await doc.reference.delete();
-        }
-        await signalingDoc.delete();
-        print('✅ Old signaling data cleared');
-      } catch (e) {
-        print('⚠️ No old signaling data to clear: $e');
-      }
-      
       final offer = await _peerConnection!.createOffer();
       await _peerConnection!.setLocalDescription(offer);
 
@@ -210,6 +224,7 @@ class WebRTCService {
   Future<void> _handleOffer(Map<String, dynamic> offerData) async {
     try {
       print('📥 Handling offer...');
+      
       final offer = RTCSessionDescription(
         offerData['sdp'],
         offerData['type'],
@@ -299,8 +314,11 @@ class WebRTCService {
   MediaStream? get localStream => _localStream;
   MediaStream? get remoteStream => _remoteStream;
 
-  Future<void> dispose() async {
-    print('🧹 Disposing WebRTC service...');
+  Future<void> dispose({bool cleanupSignaling = true}) async {
+    print('🧹 Disposing WebRTC service... cleanupSignaling=$cleanupSignaling');
+    
+    // Reset processed flag for next connection
+    _hasProcessedOffer = false;
     
     await _offerSubscription?.cancel();
     await _answerSubscription?.cancel();
@@ -319,21 +337,25 @@ class WebRTCService {
     await _peerConnection?.close();
     await _peerConnection?.dispose();
 
-    // Clean up Firestore signaling data
-    try {
-      final signalingDoc = FirebaseFirestore.instance
-          .collection('webrtc_signaling')
-          .doc(requestId);
-      
-      final candidatesSnapshot = await signalingDoc.collection('candidates').get();
-      for (var doc in candidatesSnapshot.docs) {
-        await doc.reference.delete();
+    // Clean up Firestore signaling data only if requested (broadcaster should clean, viewer shouldn't)
+    if (cleanupSignaling) {
+      try {
+        final signalingDoc = FirebaseFirestore.instance
+            .collection('webrtc_signaling')
+            .doc(requestId);
+        
+        final candidatesSnapshot = await signalingDoc.collection('candidates').get();
+        for (var doc in candidatesSnapshot.docs) {
+          await doc.reference.delete();
+        }
+        
+        await signalingDoc.delete();
+        print('🗑️ Signaling data cleaned up');
+      } catch (e) {
+        print('⚠️ Error cleaning signaling data: $e');
       }
-      
-      await signalingDoc.delete();
-      print('🗑️ Signaling data cleaned up');
-    } catch (e) {
-      print('⚠️ Error cleaning signaling data: $e');
+    } else {
+      print('⏭️ Skipping signaling cleanup (viewer disconnect)');
     }
 
     print('✅ WebRTC service disposed');

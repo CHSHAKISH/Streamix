@@ -43,6 +43,67 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     // For stream services, initialize immediately when User B accepts
     if (widget.serviceType.contains('stream')) {
       _initializeStreamingImmediately();
+      _listenForStopCommand();
+      _listenForViewerReady();
+    }
+  }
+  
+  void _listenForViewerReady() {
+    // Listen for viewer ready signal to create fresh offer
+    FirebaseFirestore.instance
+        .collection('webrtc_signaling')
+        .doc(widget.requestId)
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.exists) {
+        final data = snapshot.data();
+        if (data != null && data['viewerReady'] == true) {
+          final timestamp = data['viewerTimestamp'] as Timestamp?;
+          print('📡 Viewer ready signal received at ${timestamp?.toDate()}');
+          
+          // Create fresh offer for the viewer
+          if (_webrtcService != null && _isStreamInitialized) {
+            print('📤 Creating fresh offer for viewer...');
+            _webrtcService!.createOffer();
+          }
+        }
+      }
+    });
+  }
+  
+  void _listenForStopCommand() {
+    // Listen for STOP command from User A
+    FirebaseFirestore.instance
+        .collection('requests')
+        .doc(widget.requestId)
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.exists) {
+        final data = snapshot.data();
+        if (data != null) {
+          final command = data['remoteCommand'];
+          final status = data['status'];
+          if (command == 'STOP' || status == 'stopped_by_requester') {
+            print('🛑 Received STOP command, closing stream...');
+            _handleStop();
+          }
+        }
+      }
+    });
+  }
+  
+  Future<void> _handleStop() async {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('🛑 Stream stopped by User A'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      await Future.delayed(const Duration(seconds: 1));
+      if (mounted) {
+        Navigator.pop(context);
+      }
     }
   }
   
@@ -50,6 +111,11 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     // Small delay to ensure UI is ready
     await Future.delayed(const Duration(milliseconds: 500));
     print('🚀 Auto-initializing stream for ${widget.serviceType}...');
+    
+    setState(() {
+      _statusMessage = "🔄 Initializing camera and stream...";
+    });
+    
     await _initializeStreaming();
   }
 
@@ -139,7 +205,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   }
 
   Future<void> _cleanupStreaming() async {
-    await _webrtcService?.dispose();
+    print('🧹 Broadcaster cleaning up with signaling data removal...');
+    await _webrtcService?.dispose(cleanupSignaling: true); // Broadcaster should clean signaling
     await _localRenderer.dispose();
   }
 

@@ -32,11 +32,29 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
 
   Future<void> _initializeStream() async {
     try {
+      print('🔄 Viewer initializing connection...');
+      
+      // Signal to broadcaster that viewer is ready to connect
+      await FirebaseFirestore.instance
+          .collection('webrtc_signaling')
+          .doc(widget.requestId)
+          .set({
+        'viewerReady': true,
+        'viewerTimestamp': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      
+      print('📡 Signaled broadcaster that viewer is ready');
+      
       // Initialize video renderer
       await _remoteRenderer.initialize();
       
-      // Configure audio output
-      await _remoteRenderer.audioOutput('speaker');
+      // Configure audio output to speaker (ensure audio plays out loud on mobile)
+      try {
+        await Helper.setSpeakerphoneOn(true);
+        print('🔊 Speakerphone enabled');
+      } catch (e) {
+        print('⚠️ Unable to set speakerphone: $e');
+      }
       
       // Create WebRTC service as viewer (not initiator)
       _webrtcService = WebRTCService(
@@ -66,7 +84,7 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
 
       await _webrtcService!.initialize();
       
-      print('✅ Stream viewer initialized, waiting for broadcaster...');
+      print('✅ Stream viewer initialized, waiting for broadcaster offer...');
     } catch (e) {
       print('❌ Error initializing stream: $e');
       setState(() {
@@ -107,15 +125,24 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
     }
   }
 
-  Future<void> _cleanup() async {
-    await _webrtcService?.dispose();
+  @override
+  void dispose() {
+    // Clean up viewer connection completely when closing
+    print('👋 Viewer closing, cleaning up connection...');
+    _cleanupConnection();
+    super.dispose();
+  }
+
+  Future<void> _cleanupConnection() async {
+    // Close WebRTC but DON'T clean signaling (broadcaster keeps it)
+    await _webrtcService?.dispose(cleanupSignaling: false);
     await _remoteRenderer.dispose();
   }
 
-  @override
-  void dispose() {
-    _cleanup();
-    super.dispose();
+  Future<void> _cleanup() async {
+    print('🧹 Cleaning up viewer completely (stop stream)...');
+    await _webrtcService?.dispose(cleanupSignaling: true); // Clean everything on explicit stop
+    await _remoteRenderer.dispose();
   }
 
   @override
