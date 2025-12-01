@@ -29,10 +29,33 @@ class ViewSessionScreen extends StatefulWidget {
 
 class _ViewSessionScreenState extends State<ViewSessionScreen> {
 
+  Widget _buildDiagnosticRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              '$label:',
+              style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
       appBar: AppBar(
         title: Text('Monitor: ${widget.serviceType.toUpperCase()}'),
         backgroundColor: Colors.black,
@@ -44,222 +67,123 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
             .doc(widget.requestId)
             .snapshots(),
         builder: (context, snapshot) {
+          // Show loading state clearly
           if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          var data = snapshot.data!.data() as Map<String, dynamic>;
-          // Use pre-loaded URL if provided, otherwise read from Firestore
-          String? mediaUrl = widget.initialMediaUrl ?? data['mediaUrl'];
-          String command = data['remoteCommand'] ?? 'IDLE';
-          String status = data['status'] ?? '';
-          String? errorMessage = data['errorMessage'];
-          
-          print('🔍🔍🔍 [ViewSession] ========== DIAGNOSTIC INFO ==========');
-          print('🔍 [ViewSession] RequestId: ${widget.requestId}');
-          print('🔍 [ViewSession] ServiceType: ${widget.serviceType}');
-          print('🔍 [ViewSession] mediaUrl: $mediaUrl');
-          print('🔍 [ViewSession] mediaUrl.length: ${mediaUrl?.length ?? 0}');
-          print('🔍 [ViewSession] command: $command');
-          print('🔍 [ViewSession] status: $status');
-          print('🔍 [ViewSession] errorMessage: $errorMessage');
-          print('🔍 [ViewSession] Full document keys: ${data.keys.toList()}');
-          
-          // Check for ERROR state from User B
-          if (command == 'ERROR' && errorMessage != null) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
+            return Container(
+              color: Colors.purple,
+              child: Center(
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.error_outline, color: Colors.red, size: 80),
-                    const SizedBox(height: 20),
-                    const Text(
-                      'Capture Failed',
-                      style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 10),
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 20),
                     Text(
-                      errorMessage,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white70, fontSize: 16),
-                    ),
-                    const SizedBox(height: 30),
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.arrow_back),
-                      label: const Text('Go Back'),
-                      onPressed: () => Navigator.pop(context),
+                      'Loading from Firestore...',
+                      style: TextStyle(color: Colors.white, fontSize: 18),
                     ),
                   ],
                 ),
               ),
             );
           }
-          
-          // Debug: If command is COMPLETED but mediaUrl is null, log full data
-          if (command == 'COMPLETED' && (mediaUrl == null || mediaUrl.isEmpty)) {
-            print('⚠️⚠️⚠️ [ViewSession] CRITICAL: Command is COMPLETED but mediaUrl is MISSING!');
-            print('⚠️ [ViewSession] Full document data: $data');
-          }
-          
-          // Check if mediaUrl exists but is invalid
-          if (mediaUrl != null && mediaUrl.isNotEmpty) {
-            if (!mediaUrl.startsWith('http')) {
-              print('❌❌❌ [ViewSession] INVALID URL: Does not start with http!');
-            }
-            if (mediaUrl.contains('null') || mediaUrl.contains('undefined')) {
-              print('❌❌❌ [ViewSession] INVALID URL: Contains null/undefined!');
-            }
-          }
-          print('🔍 [ViewSession] ========================================');
-          
-          // Check if User B stopped sharing
-          if (status == 'stopped_by_provider' || command == 'STOPPED') {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('⚠️ User B has stopped sharing the camera'),
-                    backgroundColor: Colors.orange,
-                    duration: Duration(seconds: 3),
-                  ),
-                );
-                Navigator.pop(context);
-              }
-            });
-          }
 
-          // 1. REMOTE CAMERA
-          if (widget.serviceType.contains('camera')) {
-            // Debug output
-            print('🔍 [ViewSession] Camera view - mediaUrl: $mediaUrl');
-            print('🔍 [ViewSession] mediaUrl isEmpty: ${mediaUrl?.isEmpty}');
-            print('🔍 [ViewSession] mediaUrl length: ${mediaUrl?.length}');
-            
+          // Show if snapshot has error
+          if (snapshot.hasError) {
             return Container(
-              color: Colors.black,
-              child: Stack(
-                children: [
-                  // Fullscreen Image Display
-                  Center(
-                    child: mediaUrl != null && mediaUrl.isNotEmpty
-                        ? Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                'Loading image...',
-                                style: TextStyle(color: Colors.white70, fontSize: 12),
-                              ),
-                              SizedBox(height: 10),
-                              Text(
-                                'URL: ${mediaUrl.substring(0, mediaUrl.length > 50 ? 50 : mediaUrl.length)}...',
-                                style: TextStyle(color: Colors.white38, fontSize: 10),
-                              ),
-                              SizedBox(height: 20),
-                              Expanded(
-                                child: InteractiveViewer(
-                                  child: _RobustNetworkImage(url: mediaUrl),
-                                ),
-                              ),
-                            ],
-                          )
-                        : Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (command == 'REQUEST_CAPTURE') ...[
-                                const CircularProgressIndicator(color: Colors.white),
-                                const SizedBox(height: 20),
-                                const Text(
-                                  'Capturing photo from User B...',
-                                  style: TextStyle(color: Colors.white70, fontSize: 16),
-                                ),
-                              ] else if (errorMessage != null && errorMessage.isNotEmpty) ...[
-                                const Icon(Icons.error_outline, size: 80, color: Colors.red),
-                                const SizedBox(height: 20),
-                                Text(
-                                  'Error:\n$errorMessage',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(color: Colors.red, fontSize: 16),
-                                ),
-                                const SizedBox(height: 20),
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.settings),
-                                  label: const Text('Check Settings'),
-                                  onPressed: () {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text('Ask User B to enable Camera permissions in Settings'))
-                                    );
-                                  },
-                                ),
-                              ] else ...[
-                                const Icon(Icons.photo_camera, size: 80, color: Colors.grey),
-                                const SizedBox(height: 20),
-                                Text(
-                                  "Waiting for photo...\nURL available: ${mediaUrl != null}\nURL empty: ${mediaUrl?.isEmpty ?? true}",
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: Colors.grey, fontSize: 16),
-                                ),
-                              ],
-                            ],
-                          ),
-                  ),
-                  
-                  // Close button
-                  SafeArea(
-                    child: Positioned(
-                      top: 10,
-                      right: 10,
-                      child: IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 32),
-                        style: IconButton.styleFrom(
-                          backgroundColor: Colors.black54,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ),
-                  ),
-                  
-                  // Photo info overlay
-                  if (mediaUrl != null && mediaUrl.isNotEmpty)
-                    SafeArea(
-                      child: Positioned(
-                        bottom: 20,
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 20),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.check_circle, color: Colors.green, size: 20),
-                              const SizedBox(width: 8),
-                              const Text(
-                                'Photo captured successfully',
-                                style: TextStyle(color: Colors.white, fontSize: 14),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+              color: Colors.orange,
+              padding: EdgeInsets.all(20),
+              child: Center(
+                child: Text(
+                  'Firestore Error: ${snapshot.error}',
+                  style: TextStyle(color: Colors.white, fontSize: 16),
+                  textAlign: TextAlign.center,
+                ),
               ),
             );
           }
 
-          // 2. VIDEO PLAYBACK (Similar to camera - fullscreen with controls)
+          var data = snapshot.data!.data() as Map<String, dynamic>?;
+          
+          // Show if data is null
+          if (data == null) {
+            return Container(
+              color: Colors.pink,
+              padding: EdgeInsets.all(20),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.warning, size: 80, color: Colors.white),
+                    SizedBox(height: 20),
+                    Text(
+                      'Document not found!\nRequest ID: ${widget.requestId}',
+                      style: TextStyle(color: Colors.white, fontSize: 16),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          // Use pre-loaded URL if provided, otherwise read from Firestore
+          String? mediaUrl = widget.initialMediaUrl ?? data['mediaUrl'];
+          String command = data['remoteCommand'] ?? 'IDLE';
+          String status = data['status'] ?? '';
+          String? errorMessage = data['errorMessage'];
+
+          // CAMERA SERVICE - Show captured photo
+          if (widget.serviceType.contains('camera')) {
+            if (mediaUrl != null && mediaUrl.isNotEmpty) {
+              // RETURN ONLY THE IMAGE WIDGET - NOTHING ELSE
+              return WillPopScope(
+                onWillPop: () async {
+                  Navigator.pop(context);
+                  return false;
+                },
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(context), // Tap anywhere to go back
+                  child: Container(
+                    color: Colors.black, // Black background only
+                    child: Center(
+                      child: _RobustNetworkImage(url: mediaUrl),
+                    ),
+                  ),
+                ),
+              );
+            } else {
+              // No URL yet - show waiting state
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (command == 'REQUEST_CAPTURE') ...[
+                      const CircularProgressIndicator(color: Colors.white),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Capturing photo...',
+                        style: TextStyle(color: Colors.white70, fontSize: 16),
+                      ),
+                    ] else ...[
+                      const Icon(Icons.info_outline, size: 80, color: Colors.orange),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'No photo available',
+                        style: TextStyle(color: Colors.orange, fontSize: 18),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }
+          }
+
+          // VIDEO SERVICE
           if (widget.serviceType.contains('video')) {
             return Container(
               color: Colors.black,
               child: Stack(
                 children: [
-                  // Fullscreen Video Player
                   Center(
                     child: mediaUrl != null && mediaUrl.isNotEmpty
                         ? _VideoPlayerWidget(videoUrl: mediaUrl)
@@ -270,32 +194,14 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
                                 const CircularProgressIndicator(color: Colors.white),
                                 const SizedBox(height: 20),
                                 const Text(
-                                  'Recording 10s video from User B...',
+                                  'Recording video...',
                                   style: TextStyle(color: Colors.white70, fontSize: 16),
-                                ),
-                              ] else if (errorMessage != null && errorMessage.isNotEmpty) ...[
-                                const Icon(Icons.error_outline, size: 80, color: Colors.red),
-                                const SizedBox(height: 20),
-                                Text(
-                                  'Error:\n$errorMessage',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(color: Colors.red, fontSize: 16),
-                                ),
-                                const SizedBox(height: 20),
-                                ElevatedButton.icon(
-                                  icon: const Icon(Icons.settings),
-                                  label: const Text('Check Settings'),
-                                  onPressed: () {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text('Ask User B to enable Camera and Microphone permissions'))
-                                    );
-                                  },
                                 ),
                               ] else ...[
                                 const Icon(Icons.videocam, size: 80, color: Colors.grey),
                                 const SizedBox(height: 20),
                                 const Text(
-                                  "Waiting for video...\nClose and try again if needed",
+                                  "Waiting for video...",
                                   textAlign: TextAlign.center,
                                   style: TextStyle(color: Colors.grey, fontSize: 16),
                                 ),
@@ -303,8 +209,6 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
                             ],
                           ),
                   ),
-                  
-                  // Close button
                   SafeArea(
                     child: Positioned(
                       top: 10,
@@ -318,41 +222,12 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
                       ),
                     ),
                   ),
-                  
-                  // Video info overlay
-                  if (mediaUrl != null && mediaUrl.isNotEmpty)
-                    SafeArea(
-                      child: Positioned(
-                        bottom: 60, // Above progress bar
-                        left: 0,
-                        right: 0,
-                        child: Container(
-                          margin: const EdgeInsets.symmetric(horizontal: 20),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.check_circle, color: Colors.green, size: 20),
-                              SizedBox(width: 8),
-                              Text(
-                                '10-second video recorded',
-                                style: TextStyle(color: Colors.white, fontSize: 14),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
                 ],
               ),
             );
           }
-          
-          // 3. AUDIO PLAYBACK
+
+          // AUDIO SERVICE
           if (widget.serviceType == 'audio') {
             return mediaUrl != null && mediaUrl.isNotEmpty
                 ? _AudioPlayerWidget(audioUrl: mediaUrl)
@@ -361,13 +236,13 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
                   );
           }
 
-          // 4. LOCATION
+          // LOCATION SERVICE
           if (widget.serviceType == 'location') {
             return _LocationViewer(requestId: widget.requestId);
           }
 
           return const Center(
-            child: Text("Waiting...", style: TextStyle(color: Colors.white)),
+            child: Text("Unknown service", style: TextStyle(color: Colors.white)),
           );
         },
       ),
@@ -413,62 +288,30 @@ class _RobustNetworkImageState extends State<_RobustNetworkImage> {
     // Show what we have
     if (_bytes != null && _bytes!.isNotEmpty) {
       print('✅✅✅ [RobustImage] SUCCESS! Displaying ${_bytes!.length} bytes');
-      return Container(
-        color: Colors.black,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Image.memory(
-                _bytes!,
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  print('❌ [RobustImage] Image.memory error: $error');
-                  return _buildErrorWidget('Memory display failed: $error');
-                },
-              ),
-            ),
-            Container(
-              color: Colors.black87,
-              padding: EdgeInsets.all(8),
-              child: Text(
-                '✅ Image loaded (${(_bytes!.length / 1024).toStringAsFixed(1)} KB)',
-                style: TextStyle(color: Colors.green, fontSize: 10),
-              ),
-            ),
-          ],
-        ),
+      
+      return Image.memory(
+        _bytes!,
+        fit: BoxFit.contain,
+        // Explicitly set these to ensure no transparency/color filtering
+        color: null,
+        colorBlendMode: null,
+        opacity: null,
+        filterQuality: FilterQuality.high,
       );
     }
 
     if (_downloading) {
-      return Container(
-        color: Colors.black,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              CircularProgressIndicator(color: Colors.white),
-              SizedBox(height: 16),
-              Text(
-                'Downloading image...',
-                style: TextStyle(color: Colors.white70, fontSize: 14),
-              ),
-              if (_retryCount > 0)
-                Text(
-                  'Attempt ${_retryCount + 1}',
-                  style: TextStyle(color: Colors.white38, fontSize: 12),
-                ),
-              SizedBox(height: 8),
-              Text(
-                widget.url.length > 80 
-                    ? '${widget.url.substring(0, 80)}...' 
-                    : widget.url,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white24, fontSize: 8),
-              ),
-            ],
-          ),
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 16),
+            Text(
+              'Downloading image...',
+              style: TextStyle(color: Colors.white70, fontSize: 14),
+            ),
+          ],
         ),
       );
     }
@@ -477,22 +320,18 @@ class _RobustNetworkImageState extends State<_RobustNetworkImage> {
       return _buildErrorWidget(_errorMsg!);
     }
 
-    return Container(
-      color: Colors.black,
-      child: Center(
-        child: Text(
-          'Initializing...',
-          style: TextStyle(color: Colors.white38),
-        ),
+    return Center(
+      child: Text(
+        'Initializing...',
+        style: TextStyle(color: Colors.white38),
       ),
     );
   }
 
   Widget _buildErrorWidget(String message) {
-    return Container(
-      color: Colors.black,
-      padding: EdgeInsets.all(24),
-      child: Center(
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(24),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
