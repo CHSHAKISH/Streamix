@@ -180,51 +180,48 @@ class _ViewSessionScreenState extends State<ViewSessionScreen> {
 
           // VIDEO SERVICE
           if (widget.serviceType.contains('video')) {
-            return Container(
-              color: Colors.black,
-              child: Stack(
-                children: [
-                  Center(
-                    child: mediaUrl != null && mediaUrl.isNotEmpty
-                        ? _VideoPlayerWidget(videoUrl: mediaUrl)
-                        : Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (command == 'REQUEST_CAPTURE') ...[
-                                const CircularProgressIndicator(color: Colors.white),
-                                const SizedBox(height: 20),
-                                const Text(
-                                  'Recording video...',
-                                  style: TextStyle(color: Colors.white70, fontSize: 16),
-                                ),
-                              ] else ...[
-                                const Icon(Icons.videocam, size: 80, color: Colors.grey),
-                                const SizedBox(height: 20),
-                                const Text(
-                                  "Waiting for video...",
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: Colors.grey, fontSize: 16),
-                                ),
-                              ],
-                            ],
-                          ),
-                  ),
-                  SafeArea(
-                    child: Positioned(
-                      top: 10,
-                      left: 10,
-                      child: IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white, size: 32),
-                        style: IconButton.styleFrom(
-                          backgroundColor: Colors.black54,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                      ),
+            if (mediaUrl != null && mediaUrl.isNotEmpty) {
+              // RETURN ONLY THE VIDEO WIDGET - SAME AS IMAGE
+              return WillPopScope(
+                onWillPop: () async {
+                  Navigator.pop(context);
+                  return false;
+                },
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(context), // Tap anywhere to go back
+                  child: Container(
+                    color: Colors.black,
+                    child: Center(
+                      child: _VideoPlayerWidget(videoUrl: mediaUrl),
                     ),
                   ),
-                ],
-              ),
-            );
+                ),
+              );
+            } else {
+              // No URL yet - show waiting state
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (command == 'REQUEST_CAPTURE') ...[
+                      const CircularProgressIndicator(color: Colors.white),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Recording video...',
+                        style: TextStyle(color: Colors.white70, fontSize: 16),
+                      ),
+                    ] else ...[
+                      const Icon(Icons.videocam, size: 80, color: Colors.grey),
+                      const SizedBox(height: 20),
+                      const Text(
+                        'No video available',
+                        style: TextStyle(color: Colors.grey, fontSize: 16),
+                      ),
+                    ],
+                  ],
+                ),
+              );
+            }
           }
 
           // AUDIO SERVICE
@@ -291,7 +288,9 @@ class _RobustNetworkImageState extends State<_RobustNetworkImage> {
       
       return Image.memory(
         _bytes!,
-        fit: BoxFit.contain,
+        fit: BoxFit.cover, // Cover full screen
+        width: double.infinity,
+        height: double.infinity,
         // Explicitly set these to ensure no transparency/color filtering
         color: null,
         colorBlendMode: null,
