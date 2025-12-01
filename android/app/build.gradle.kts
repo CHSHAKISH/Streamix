@@ -32,8 +32,10 @@ android {
     }
 
     buildTypes {
-        release {
+        getByName("release") {
             signingConfig = signingConfigs.getByName("debug")
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
@@ -45,4 +47,27 @@ flutter {
 dependencies {
     // 3. Add Desugar Library
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+
+// Fix for Flutter not finding APK with Kotlin DSL
+afterEvaluate {
+    tasks.register("copyFlutterApk") {
+        doLast {
+            val flutterApkDir = file("${project.rootDir}/../build/app/outputs/flutter-apk")
+            flutterApkDir.mkdirs()
+            
+            val androidApkDir = file("${layout.buildDirectory.get()}/outputs/flutter-apk")
+            if (androidApkDir.exists()) {
+                copy {
+                    from(androidApkDir)
+                    into(flutterApkDir)
+                    include("*.apk")
+                }
+                println("✅ APK copied to Flutter expected location")
+            }
+        }
+    }
+
+    tasks.findByName("assembleRelease")?.finalizedBy("copyFlutterApk")
+    tasks.findByName("assembleDebug")?.finalizedBy("copyFlutterApk")
 }

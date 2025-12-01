@@ -39,6 +39,7 @@ class _RequestDialogState extends State<RequestDialog> {
     );
     if (date == null) return;
 
+    if (!context.mounted) return;
     final time = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(isStartTime ? _startTime : _endTime),

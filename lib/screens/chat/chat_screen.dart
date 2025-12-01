@@ -85,7 +85,7 @@ class _ChatScreenState extends State<ChatScreen> {
               color: Theme.of(context).cardColor,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 5,
                   offset: const Offset(0, -2),
                 ),
@@ -195,7 +195,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: textColor, fontSize: 16)),
-                    Text(timeInfo, style: TextStyle(color: textColor.withOpacity(0.8), fontSize: 12)),
+                    Text(timeInfo, style: TextStyle(color: textColor.withValues(alpha: textColor.a * 0.8), fontSize: 12)),
                   ],
                 ),
               ),
@@ -351,15 +351,42 @@ class _ChatScreenState extends State<ChatScreen> {
                     
                     // Open viewer if media is ready
                     if (mediaReady && mediaUrl != null && context.mounted) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => ViewSessionScreen(
-                            requestId: requestId,
-                            serviceType: data['serviceType'],
+                      print('✅ [ChatScreen] Media ready! URL: $mediaUrl');
+                      
+                      // CRITICAL FIX: Add a delay to ensure Supabase URL is fully propagated
+                      print('⏳ [ChatScreen] Waiting 3 seconds for URL propagation and CDN...');
+                      await Future.delayed(const Duration(seconds: 3));
+                      
+                      // Verify URL is still valid by re-reading from Firestore
+                      final verifyDoc = await FirebaseFirestore.instance
+                          .collection('requests')
+                          .doc(requestId)
+                          .get();
+                      final verifiedUrl = verifyDoc.data()?['mediaUrl'] as String?;
+                      
+                      if (verifiedUrl != null && verifiedUrl.isNotEmpty && context.mounted) {
+                        print('✅ [ChatScreen] URL verified, opening viewer...');
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ViewSessionScreen(
+                              requestId: requestId,
+                              serviceType: data['serviceType'],
+                              initialMediaUrl: verifiedUrl, // Pass URL directly to avoid sync delays
+                            ),
                           ),
-                        ),
-                      );
+                        );
+                      } else {
+                        print('❌ [ChatScreen] URL verification failed');
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('⚠️ Media URL not available. Please try again.'),
+                              backgroundColor: Colors.orange,
+                            ),
+                          );
+                        }
+                      }
                     } else if (context.mounted) {
                       // Check the command status to give better error message
                       final finalDoc = await FirebaseFirestore.instance
@@ -367,9 +394,13 @@ class _ChatScreenState extends State<ChatScreen> {
                           .doc(requestId)
                           .get();
                       final finalCommand = finalDoc.data()?['remoteCommand'] as String?;
+                      final errorMessage = finalDoc.data()?['errorMessage'] as String?;
                       
                       String errorMsg;
-                      if (finalCommand == 'REQUEST_CAPTURE') {
+                      if (finalCommand == 'ERROR' && errorMessage != null) {
+                        // Show the actual error from User B's device
+                        errorMsg = '❌ Error from User B: $errorMessage';
+                      } else if (finalCommand == 'REQUEST_CAPTURE') {
                         errorMsg = isVideo 
                             ? '⚠️ Video recording in progress but not completed yet. Please wait or try again.'
                             : isAudio
@@ -377,25 +408,44 @@ class _ChatScreenState extends State<ChatScreen> {
                                 : '⚠️ Photo capture in progress but not completed yet. Please wait or try again.';
                       } else {
                         errorMsg = isVideo 
-                            ? '⚠️ Video recording timeout. Make sure User B has opened the session first.'
+                            ? '⚠️ Video recording timeout. Make sure User B has the app open in background.'
                             : isAudio
-                                ? '⚠️ Audio recording timeout. Make sure User B has opened the session first.'
-                                : '⚠️ Photo capture timeout. Make sure User B has opened the session first.';
+                                ? '⚠️ Audio recording timeout. Make sure User B has the app open in background.'
+                                : '⚠️ Photo capture timeout. Make sure User B has the app open in background.';
                       }
                       
                       // Show error if timeout
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(errorMsg),
-                          backgroundColor: Colors.orange,
-                          duration: const Duration(seconds: 5),
-                          action: SnackBarAction(
-                            label: 'Retry',
-                            textColor: Colors.white,
-                            onPressed: () {
-                              // Trigger again
-                              _ticketService.sendCameraTrigger(requestId);
-                            },
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(errorMsg),
+                            backgroundColor: Colors.orange,
+                            duration: const Duration(seconds: 5),
+                            action: SnackBarAction(
+                              label: 'Retry',
+                              textColor: Colors.white,
+                              onPressed: () {
+                                // Trigger again
+                                _ticketService.sendCameraTrigger(requestId);
+                              },
+                            ),
+                          ),
+                        );
+                      }
+                    }
+                    return;
+                  }
+
+                  // For other services
+                  if (status == 'completed' || (mediaUrl != null && mediaUrl.isNotEmpty)) {
+                    if (context.mounted) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ViewSessionScreen(
+                            requestId: requestId,
+                            serviceType: data['serviceType'],
+                            initialMediaUrl: mediaUrl, // CRITICAL FIX: Pass the URL!
                           ),
                         ),
                       );
@@ -403,29 +453,18 @@ class _ChatScreenState extends State<ChatScreen> {
                     return;
                   }
 
-                  // For other services
-                  if (status == 'completed' || (mediaUrl != null && mediaUrl.isNotEmpty)) {
+                  if (context.mounted) {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
                         builder: (context) => ViewSessionScreen(
                           requestId: requestId,
                           serviceType: data['serviceType'],
+                          initialMediaUrl: mediaUrl, // CRITICAL FIX: Pass the URL!
                         ),
                       ),
                     );
-                    return;
                   }
-
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ViewSessionScreen(
-                        requestId: requestId,
-                        serviceType: data['serviceType'],
-                      ),
-                    ),
-                  );
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Theme.of(context).colorScheme.secondary,

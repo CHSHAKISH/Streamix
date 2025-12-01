@@ -18,12 +18,28 @@ class TicketService {
   // --- 2. MARK COMPLETE (User B) ---
   // "I finished the job. I am setting flag to COMPLETED"
   Future<void> completeCameraTask(String requestId, String mediaUrl) async {
-    print("✅ [TicketService] Task Finished. Updating URL.");
-    await _firestore.collection('requests').doc(requestId).update({
-      'remoteCommand': 'COMPLETED',
-      'mediaUrl': mediaUrl,
-      'lastUpdated': FieldValue.serverTimestamp(),
-    });
+    try {
+      print("✅ [TicketService] Task Finished. Updating URL: $mediaUrl");
+      print("✅ [TicketService] RequestId: $requestId");
+      
+      await _firestore.collection('requests').doc(requestId).update({
+        'remoteCommand': 'COMPLETED',
+        'mediaUrl': mediaUrl,
+        'lastUpdated': FieldValue.serverTimestamp(),
+      });
+      
+      print("✅ [TicketService] Firestore update completed successfully");
+      
+      // Verify the update
+      final doc = await _firestore.collection('requests').doc(requestId).get();
+      if (doc.exists) {
+        final data = doc.data();
+        print("✅ [TicketService] Verification - mediaUrl in Firestore: ${data?['mediaUrl']}");
+      }
+    } catch (e) {
+      print("❌ [TicketService] Error updating Firestore: $e");
+      rethrow;
+    }
   }
 
   // --- 3. RESET (Optional cleanup) ---

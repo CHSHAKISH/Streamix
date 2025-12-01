@@ -88,12 +88,14 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
   void _openSession(String requestId, String service, DateTime start, DateTime end) {
     // Route to Active Session Screen for camera, video, audio, and stream services
     if (service.contains('video') || service.contains('camera') || service == 'audio' || service.contains('stream')) {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(
-          requestId: requestId,
-          serviceType: service,
-          scheduledStartTime: start,
-          scheduledEndTime: end
-      )));
+      if (context.mounted) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(
+            requestId: requestId,
+            serviceType: service,
+            scheduledStartTime: start,
+            scheduledEndTime: end
+        )));
+      }
     }
   }
 
@@ -184,17 +186,19 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                   
                                   // Auto-navigate to ActiveSessionScreen for audio and stream services
                                   if (service == 'audio' || service.contains('stream')) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => ActiveSessionScreen(
-                                          requestId: requestId,
-                                          serviceType: service,
-                                          scheduledStartTime: startTime,
-                                          scheduledEndTime: endTime,
+                                    if (context.mounted) {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ActiveSessionScreen(
+                                            requestId: requestId,
+                                            serviceType: service,
+                                            scheduledStartTime: startTime,
+                                            scheduledEndTime: endTime,
+                                          ),
                                         ),
-                                      ),
-                                    );
+                                      );
+                                    }
                                   }
                                 },
                                 child: const Text("ACCEPT"),

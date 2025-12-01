@@ -32,19 +32,44 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
   Timestamp? _lastProcessedTriggerTime;
   bool _isProcessing = false;
   bool _isRecording = false;
-  bool _isDisposing = false;
+  final bool _isDisposing = false;
   Timer? _recordingTimer;
   Timer? _pollingTimer; // Backup polling mechanism
 
   @override
   void initState() {
     super.initState();
+    print('═══════════════════════════════════════════════════════');
+    print('🚀🚀🚀 [GlobalCamera] INITIALIZING GlobalCameraHandler');
+    print('═══════════════════════════════════════════════════════');
+    
     WidgetsBinding.instance.addObserver(this);
+    
+    final user = FirebaseAuth.instance.currentUser;
+    print('👤 [GlobalCamera] Current User: ${user?.uid ?? "NULL"}');
+    print('📧 [GlobalCamera] User Email: ${user?.email ?? "NULL"}');
+    
     if (_currentUserId.isNotEmpty) {
+      print('✅ [GlobalCamera] User ID is valid: $_currentUserId');
+      print('🎤 [GlobalCamera] Initializing audio recorder...');
       _initAudioRecorder();
-      _ensureRuntimePermissions(); // Request camera/mic early on startup to avoid missing-permission issues in release APKs
+      
+      print('🔐 [GlobalCamera] Requesting runtime permissions...');
+      _ensureRuntimePermissions();
+      
+      print('👀 [GlobalCamera] Starting Firestore listener...');
       _listenForActiveRequests();
-      _startBackupPolling(); // Start backup polling every 3 seconds
+      
+      print('🔄 [GlobalCamera] Starting backup polling (1 second interval)...');
+      _startBackupPolling();
+      
+      print('═══════════════════════════════════════════════════════');
+      print('✅✅✅ [GlobalCamera] INITIALIZATION COMPLETE - Ready to receive commands');
+      print('═══════════════════════════════════════════════════════');
+    } else {
+      print('═══════════════════════════════════════════════════════');
+      print('❌❌❌ [GlobalCamera] INITIALIZATION FAILED - currentUserId is EMPTY!');
+      print('═══════════════════════════════════════════════════════');
     }
   }
 
@@ -52,38 +77,59 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
   /// prompt the user and we can detect permanently denied state early.
   Future<void> _ensureRuntimePermissions() async {
     try {
-      print('🔐 [GlobalCamera] Ensuring runtime permissions for camera/microphone');
+      print('🔐 [GlobalCamera] ========== PERMISSION CHECK START ==========');
 
       final cameraStatus = await Permission.camera.status;
+      print('🔐 [GlobalCamera] Camera permission status: $cameraStatus');
+      
       if (!cameraStatus.isGranted) {
+        print('🔐 [GlobalCamera] Camera NOT granted, requesting...');
         final result = await Permission.camera.request();
         print('🔐 [GlobalCamera] Camera permission result: $result');
         if (result.isPermanentlyDenied) {
-          // Guide user to settings
+          print('❌ [GlobalCamera] Camera permission PERMANENTLY DENIED!');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('Camera permission permanently denied. Please enable it in app settings.'),
               backgroundColor: Colors.orange,
             ));
           }
+        } else if (result.isGranted) {
+          print('✅ [GlobalCamera] Camera permission GRANTED!');
+        } else if (result.isDenied) {
+          print('⚠️ [GlobalCamera] Camera permission DENIED (can request again)');
         }
+      } else {
+        print('✅ [GlobalCamera] Camera permission already GRANTED');
       }
 
       final micStatus = await Permission.microphone.status;
+      print('🔐 [GlobalCamera] Microphone permission status: $micStatus');
+      
       if (!micStatus.isGranted) {
+        print('🔐 [GlobalCamera] Microphone NOT granted, requesting...');
         final mres = await Permission.microphone.request();
         print('🔐 [GlobalCamera] Microphone permission result: $mres');
         if (mres.isPermanentlyDenied) {
+          print('❌ [GlobalCamera] Microphone permission PERMANENTLY DENIED!');
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('Microphone permission permanently denied. Please enable it in app settings.'),
               backgroundColor: Colors.orange,
             ));
           }
+        } else if (mres.isGranted) {
+          print('✅ [GlobalCamera] Microphone permission GRANTED!');
+        } else if (mres.isDenied) {
+          print('⚠️ [GlobalCamera] Microphone permission DENIED (can request again)');
         }
+      } else {
+        print('✅ [GlobalCamera] Microphone permission already GRANTED');
       }
+      
+      print('🔐 [GlobalCamera] ========== PERMISSION CHECK COMPLETE ==========');
     } catch (e) {
-      print('❌ [GlobalCamera] Error while requesting runtime permissions: $e');
+      print('❌❌❌ [GlobalCamera] EXCEPTION while requesting runtime permissions: $e');
     }
   }
 
@@ -204,11 +250,12 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         .where('peerUserId', isEqualTo: _currentUserId)
         .where('status', isEqualTo: 'accepted')
         .snapshots()
-        .listen((snapshot) {
-
-      print("📬 [GlobalCamera] Received snapshot with ${snapshot.docs.length} documents");
-      
-      final now = DateTime.now();
+        .listen(
+      (snapshot) {
+        try {
+          print("📬📬📬 [GlobalCamera] SNAPSHOT RECEIVED with ${snapshot.docs.length} documents");
+          
+          final now = DateTime.now();
 
       var activeDocs = snapshot.docs.where((doc) {
         var data = doc.data();
@@ -239,9 +286,35 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         print("   🔍 startTime: $startTime, endTime: $endTime, now: $now");
         print("   🔍 inTimeWindow=$inTimeWindow, command=$command, hasActiveCommand=$hasActiveCommand");
         
-        // Allow if either in time window OR has active capture command
+        // CRITICAL FIX: Handle stale REQUEST_CAPTURE commands from expired sessions
+        if (!inTimeWindow && command == 'REQUEST_CAPTURE') {
+          // Check if command is stale (more than 2 minutes old)
+          Timestamp? cmdTimestamp = data['commandTimestamp'] as Timestamp?;
+          if (cmdTimestamp != null) {
+            final cmdAge = DateTime.now().difference(cmdTimestamp.toDate());
+            if (cmdAge.inMinutes > 2) {
+              print("   ⚠️ STALE REQUEST_CAPTURE (${cmdAge.inMinutes}min old) - auto-resetting to IDLE");
+              FirebaseFirestore.instance.collection('requests').doc(doc.id).update({
+                'remoteCommand': 'IDLE',
+              }).catchError((e) => print("   ❌ Reset failed: $e"));
+              return false;
+            }
+          }
+        }
+        
+        // Allow if in time window OR has recent REQUEST_CAPTURE command
         return inTimeWindow || hasActiveCommand;
       }).toList();
+      
+      // Sort by commandTimestamp (most recent first) to prioritize new capture requests
+      activeDocs.sort((a, b) {
+        final aTimestamp = a.data()['commandTimestamp'] as Timestamp?;
+        final bTimestamp = b.data()['commandTimestamp'] as Timestamp?;
+        if (aTimestamp == null && bTimestamp == null) return 0;
+        if (aTimestamp == null) return 1;
+        if (bTimestamp == null) return -1;
+        return bTimestamp.compareTo(aTimestamp); // Most recent first
+      });
       
       print("📊 [GlobalCamera] Found ${activeDocs.length} active camera/video requests");
 
@@ -262,7 +335,13 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         String command = data['remoteCommand'] ?? 'IDLE';
         Timestamp? commandTimestamp = data['commandTimestamp'] as Timestamp?;
         
-        print("🔍 [GlobalCamera] Command: $command, Processing: $_isProcessing, LastTime: $_lastProcessedTriggerTime, NewTime: $commandTimestamp");
+        print("🔍🔍🔍 [GlobalCamera] CHECKING COMMAND:");
+        print("   - Command: $command");
+        print("   - Processing: $_isProcessing");
+        print("   - LastTime: $_lastProcessedTriggerTime");
+        print("   - NewTime: $commandTimestamp");
+        print("   - ServiceType: $serviceType");
+        print("   - RequestId: ${doc.id}");
         
         // Execute capture/recording on REQUEST_CAPTURE
         if (command == 'REQUEST_CAPTURE' && !_isProcessing) {
@@ -290,16 +369,25 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
         }
 
       } else {
-        // Don't dispose immediately - keep camera ready for quick successive requests
-        // _disposeCamera(); // Commented out to prevent disposal race conditions
+        // No active documents - keep listener alive
+        print("📭 [GlobalCamera] No active documents in this snapshot");
       }
-    });
+        } catch (e, stackTrace) {
+          print("❌❌❌ [GlobalCamera] ERROR in snapshot listener: $e");
+          print("Stack trace: $stackTrace");
+        }
+      },
+      onError: (error) {
+        print("❌❌❌ [GlobalCamera] LISTENER ERROR: $error");
+      },
+      cancelOnError: false, // Keep listener alive even if errors occur
+    );
   }
 
-  // Backup polling mechanism - checks Firestore every 3 seconds for pending commands
+  // Backup polling mechanism - checks Firestore every 1 second for pending commands
   void _startBackupPolling() {
-    print("🔄 [GlobalCamera] Starting backup polling mechanism");
-    _pollingTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+    print("🔄🔄🔄 [GlobalCamera] Starting backup polling mechanism (every 1 second)");
+    _pollingTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       if (_isProcessing || _currentUserId.isEmpty) return;
       
       try {
@@ -433,12 +521,17 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       
       print("🎥 [GlobalCamera] Selected camera: ${camera.name}, Direction: ${camera.lensDirection}");
 
-      // Must use at least 'medium' resolution or some devices fail to capture
-      // Enable audio for video recording
-      final controller = CameraController(camera, ResolutionPreset.medium, enableAudio: isVideo);
+      // Use 'low' resolution to minimize camera use cases and avoid surface combination errors
+      // Some Android devices can't handle PREVIEW + IMAGE_CAPTURE + IMAGE_ANALYSIS simultaneously
+      // Low resolution ensures compatibility across all devices
+      final controller = CameraController(
+        camera,
+        ResolutionPreset.low,
+        enableAudio: isVideo,
+      );
       print("🎥 [GlobalCamera] Calling controller.initialize()...");
       await controller.initialize();
-      print("🎥 [GlobalCamera] Camera initialized successfully - Audio ${isVideo ? 'ENABLED ✅' : 'DISABLED ❌'} for ${serviceType}");
+      print("🎥 [GlobalCamera] Camera initialized successfully - Audio ${isVideo ? 'ENABLED ✅' : 'DISABLED ❌'} for $serviceType");
       print("🎥 [GlobalCamera] Controller.enableAudio = ${controller.enableAudio}");
       print("🎥 [GlobalCamera] Controller.value.isInitialized = ${controller.value.isInitialized}");
 
@@ -455,7 +548,14 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
     } catch (e, stackTrace) {
       print("❌ [GlobalCamera] Hardware Error: $e");
       print("❌ [GlobalCamera] Stack trace: $stackTrace");
-      await _updateFirestoreError(requestId, 'Camera initialization failed: $e');
+      
+      // Store error in Firestore so User A can see it
+      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+        'remoteCommand': 'ERROR',
+        'errorMessage': 'Camera initialization failed: ${e.toString()}',
+        'lastUpdated': FieldValue.serverTimestamp(),
+      });
+      
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("❌ Camera error: $e"), backgroundColor: Colors.red)
@@ -474,25 +574,6 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       print("📝 [GlobalCamera] Updated Firestore with error: $errorMessage");
     } catch (e) {
       print("❌ [GlobalCamera] Failed to update Firestore error: $e");
-    }
-  }
-
-  void _disposeCamera() {
-    // Don't dispose if actively recording or already disposing!
-    if (_isRecording || _isDisposing) {
-      print("⚠️ [GlobalCamera] Cannot dispose camera - ${_isRecording ? 'recording' : 'disposal'} in progress");
-      return;
-    }
-    
-    if (_cameraController != null) {
-      print("💤 [GlobalCamera] Releasing Hardware");
-      _isDisposing = true;
-      _cameraController?.dispose();
-      _cameraController = null;
-      _activeRequestId = null;
-      _activeServiceType = null;
-      _isDisposing = false;
-      if (mounted) setState(() {});
     }
   }
 
@@ -556,6 +637,9 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
 
     try {
       print('📸 [GlobalCamera] Taking picture with ${isFront ? "FRONT" : "BACK"} camera...');
+      print('📸 [GlobalCamera] Camera description: ${_cameraController!.description}');
+      print('📸 [GlobalCamera] Camera value: isInitialized=${_cameraController!.value.isInitialized}, isRecordingVideo=${_cameraController!.value.isRecordingVideo}');
+      
       // Disable shutter sound if possible (device dependent)
       final XFile image = await _cameraController!.takePicture();
       print("📸 [GlobalCamera] Picture captured! Path: ${image.path}");
@@ -565,22 +649,28 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
 
       if (url != null) {
         print('📸 [GlobalCamera] Upload successful! URL: $url');
-        print('📸 [GlobalCamera] Updating Firestore...');
+        print('📸 [GlobalCamera] Updating Firestore with COMPLETED status...');
         await _ticketService.completeCameraTask(requestId, url);
-        
-        // Reset command to IDLE so next trigger can work
-        print('📸 [GlobalCamera] Resetting command to IDLE...');
-        await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
-          'remoteCommand': 'IDLE',
-        });
-        print("✅ [GlobalCamera] Complete! Photo sent to User A");
+        print("✅ [GlobalCamera] Complete! Photo sent to User A - Status: COMPLETED");
+        // NOTE: We don't reset to IDLE here - let COMPLETED status persist so requester can load the image
+        // The command will be reset when a new REQUEST_CAPTURE comes in
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Sent to User A")));
       } else {
         print('🔴 [GlobalCamera] Upload failed - URL is null');
+        await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+          'remoteCommand': 'ERROR',
+          'errorMessage': 'Upload failed - Supabase returned null URL',
+          'lastUpdated': FieldValue.serverTimestamp(),
+        });
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("❌ Upload failed"), backgroundColor: Colors.red));
       }
     } catch (e) {
       print("❌ [GlobalCamera] Capture Error: $e");
+      await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
+        'remoteCommand': 'ERROR',
+        'errorMessage': 'Photo capture error: ${e.toString()}',
+        'lastUpdated': FieldValue.serverTimestamp(),
+      });
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("❌ Error: $e"), backgroundColor: Colors.red));
     } finally {
       _isProcessing = false;
@@ -659,9 +749,29 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
     try {
       print('🎥 [GlobalVideo] Starting video recording with ${isFront ? "FRONT" : "BACK"} camera...');
       print('🎥 [GlobalVideo] Camera.enableAudio = ${_cameraController!.enableAudio}');
+      print('🎥 [GlobalVideo] Camera.isRecordingVideo = ${_cameraController!.value.isRecordingVideo}');
+      print('🎥 [GlobalVideo] Camera.isRecordingPaused = ${_cameraController!.value.isRecordingPaused}');
       
       if (!_cameraController!.enableAudio) {
         print('⚠️⚠️⚠️ [GlobalVideo] WARNING: Audio is DISABLED! Video will have no sound!');
+      }
+      
+      // Check if already recording (shouldn't happen, but safety check)
+      if (_cameraController!.value.isRecordingVideo) {
+        print('⚠️ [GlobalVideo] Camera already recording! Stopping first...');
+        try {
+          await _cameraController!.stopVideoRecording();
+          await Future.delayed(const Duration(milliseconds: 500));
+        } catch (e) {
+          print('⚠️ [GlobalVideo] Error stopping existing recording: $e');
+          // Reinitialize camera if stop failed
+          await _initializeHiddenCamera(requestId, serviceType);
+          if (_cameraController == null || !_cameraController!.value.isInitialized) {
+            print('❌ [GlobalVideo] Failed to reinitialize camera');
+            await _updateFirestoreError(requestId, 'Camera reinitialization failed');
+            return;
+          }
+        }
       }
       
       // Start recording
@@ -682,9 +792,18 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       // Wait for 10 seconds
       await Future.delayed(const Duration(seconds: 10));
       
-      // Stop recording
+      // Stop recording - verify still recording before stopping
       final stopTime = DateTime.now();
       print('🎥 [GlobalVideo] Stopping recording at ${stopTime.toIso8601String()}...');
+      
+      if (!_cameraController!.value.isRecordingVideo) {
+        print('❌ [GlobalVideo] ERROR: Camera is NOT recording! Cannot stop.');
+        await _updateFirestoreError(requestId, 'Video recording failed - camera stopped recording unexpectedly');
+        _isRecording = false;
+        _recordingTimer?.cancel();
+        return;
+      }
+      
       final XFile video = await _cameraController!.stopVideoRecording();
       _isRecording = false;
       _recordingTimer?.cancel();
@@ -701,29 +820,17 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
       String? url = await _supabaseStorage.uploadRequestMedia(requestId, File(video.path), 'mp4');
       print("🎥 [GlobalVideo] Upload completed. URL: ${url ?? 'NULL'}");
 
-      if (url != null) {
-        print('🎥 [GlobalVideo] Upload successful! URL: $url');
-        print('🎥 [GlobalVideo] Updating Firestore with remoteCommand=COMPLETED...');
-        
-        try {
-          await _ticketService.completeCameraTask(requestId, url);
-          print('✅ [GlobalVideo] Firestore updated successfully');
-        } catch (e) {
-          print('❌ [GlobalVideo] Firestore update error: $e');
-        }
-        
-        // Reset command to IDLE so next trigger can work
-        print('🎥 [GlobalVideo] Resetting command to IDLE...');
-        try {
-          await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
-            'remoteCommand': 'IDLE',
-          });
-          print('✅ [GlobalVideo] Command reset to IDLE');
-        } catch (e) {
-          print('❌ [GlobalVideo] Reset command error: $e');
-        }
-        
-        print("✅ [GlobalVideo] Complete! Video sent to User A");
+        if (url != null) {
+          print('🎥 [GlobalVideo] Upload successful! URL: $url');
+          print('🎥 [GlobalVideo] Updating Firestore with remoteCommand=COMPLETED...');
+          
+          try {
+            await _ticketService.completeCameraTask(requestId, url);
+            print('✅ [GlobalVideo] Firestore updated successfully - Status: COMPLETED');
+            // NOTE: We don't reset to IDLE here - let COMPLETED status persist
+          } catch (e) {
+            print('❌ [GlobalVideo] Firestore update error: $e');
+          }        print("✅ [GlobalVideo] Complete! Video sent to User A");
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Video sent to User A")));
       } else {
         print('🔴 [GlobalVideo] Upload failed - URL is null');
@@ -765,9 +872,11 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
     var status = await Permission.microphone.request();
     if (status.isDenied) {
       print("❌ [GlobalAudio] Microphone permission denied");
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("❌ Microphone permission denied"), backgroundColor: Colors.red)
       );
+      }
       return;
     }
 
@@ -830,15 +939,10 @@ class _GlobalCameraHandlerState extends State<GlobalCameraHandler> with WidgetsB
 
       if (url != null) {
         print('🎤 [GlobalAudio] Upload successful! URL: $url');
-        print('🎤 [GlobalAudio] Updating Firestore...');
+        print('🎤 [GlobalAudio] Updating Firestore with COMPLETED status...');
         await _ticketService.completeCameraTask(requestId, url);
-        
-        // Reset command to IDLE so next trigger can work
-        print('🎤 [GlobalAudio] Resetting command to IDLE...');
-        await FirebaseFirestore.instance.collection('requests').doc(requestId).update({
-          'remoteCommand': 'IDLE',
-        });
-        print("✅ [GlobalAudio] Complete! Audio sent to User A");
+        print("✅ [GlobalAudio] Complete! Audio sent to User A - Status: COMPLETED");
+        // NOTE: We don't reset to IDLE here - let COMPLETED status persist
         if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("✅ Audio sent to User A")));
       } else {
         print('🔴 [GlobalAudio] Upload failed - URL is null');

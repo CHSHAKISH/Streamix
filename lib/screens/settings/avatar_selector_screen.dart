@@ -106,7 +106,7 @@ class _AvatarSelectorScreenState extends State<AvatarSelectorScreen> {
                 return InkWell(
                   onTap: () => _saveAvatar(avatar),
                   child: CircleAvatar(
-                    backgroundColor: Theme.of(context).primaryColor.withOpacity(0.1),
+                    backgroundColor: Theme.of(context).primaryColor.withValues(alpha: 0.1),
                     child: Text(avatar, style: const TextStyle(fontSize: 30)),
                   ),
                 );
