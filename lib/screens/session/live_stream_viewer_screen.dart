@@ -83,14 +83,18 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
           final audioTracks = stream.getAudioTracks();
           final videoTracks = stream.getVideoTracks();
           print('📊 Remote stream tracks - audio: ${audioTracks.length}, video: ${videoTracks.length}');
+          
+          // Enable all audio tracks
           for (var a in audioTracks) {
             print('🔊 Audio track found: id=${a.id}, enabled=${a.enabled}');
             try {
               a.enabled = true;
+              print('🔊 Audio track ${a.id} enabled');
             } catch (e) {
               print('⚠️ Failed to enable audio track ${a.id}: $e');
             }
           }
+          
           for (var v in videoTracks) {
             print('🎞️ Video track found: id=${v.id}, kind=${v.kind}');
           }
@@ -104,6 +108,10 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
           if (videoTracks.isEmpty) {
             print('⚠️ Remote stream has no video tracks - viewer will see a black/white screen');
           }
+          
+          if (audioTracks.isEmpty) {
+            print('⚠️ Remote stream has no audio tracks - viewer will not hear audio');
+          }
         },
         onConnectionStateChange: (state) {
           setState(() {
@@ -115,6 +123,41 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
       await _webrtcService!.initialize();
       
       print('✅ Stream viewer initialized, waiting for broadcaster offer...');
+      
+        // If no remote stream arrives within a short timeout, re-signal readiness
+        // to request a fresh offer from the broadcaster. Retry a few times.
+        (() async {
+          final signalingRef = FirebaseFirestore.instance.collection('webrtc_signaling').doc(widget.requestId);
+          int attempts = 0;
+          while (attempts < 3 && mounted) {
+            await Future.delayed(const Duration(seconds: 6));
+            attempts++;
+            if (!mounted) break;
+            // If remote stream not set yet, try re-sending viewerReady to prompt broadcaster
+            if (_remoteRenderer.srcObject == null) {
+              print('🔁 No remote stream yet after ${6 * attempts}s — re-sending viewerReady (attempt $attempts)');
+              try {
+                await signalingRef.set({
+                  'viewerReady': true,
+                  'viewerTimestamp': FieldValue.serverTimestamp(),
+                  'viewerRetry': attempts,
+                }, SetOptions(merge: true));
+              } catch (e) {
+                print('⚠️ Failed to re-signal viewerReady: $e');
+              }
+            } else {
+              // Remote stream arrived — stop retries
+              print('✅ Remote stream arrived before retry #$attempts');
+              break;
+            }
+          }
+          if (_remoteRenderer.srcObject == null && mounted) {
+            setState(() {
+              _isConnecting = false;
+              _connectionStatus = 'No remote stream received';
+            });
+          }
+        })();
     } catch (e) {
       print('❌ Error initializing stream: $e');
       setState(() {
@@ -134,6 +177,7 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
       final audioTracks = _remoteRenderer.srcObject!.getAudioTracks();
       for (var track in audioTracks) {
         track.enabled = !_isMuted;
+        print('🔊 Audio track ${track.id} ${_isMuted ? "muted" : "unmuted"}');
       }
     }
   }
@@ -231,94 +275,113 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
             );
           }
 
-          return Stack(
-            fit: StackFit.expand,
-            children: [
-              // Live Stream View
-              if (_isConnecting)
-                Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const CircularProgressIndicator(color: Colors.white),
-                      const SizedBox(height: 20),
-                      Text(
-                        _connectionStatus,
-                        style: const TextStyle(color: Colors.white, fontSize: 16),
-                      ),
-                    ],
-                  ),
-                )
-              else if (_remoteRenderer.srcObject != null)
-                // Display actual video stream
-                RTCVideoView(_remoteRenderer, mirror: isFront)
-              else
-                Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        isFront ? Icons.camera_front : Icons.camera_rear,
-                        size: 100,
-                        color: Colors.white70,
-                      ),
-                      const SizedBox(height: 20),
-                      const Text(
-                        'Waiting for stream...',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-              // Mute Indicator
-              if (_isMuted)
-                Positioned(
-                  top: 20,
-                  left: 20,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
+          return Container(
+            color: Colors.black,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // Live Stream View - FILL ENTIRE SCREEN
+                if (_isConnecting)
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.mic_off, color: Colors.white, size: 16),
-                        SizedBox(width: 6),
+                        const CircularProgressIndicator(color: Colors.white),
+                        const SizedBox(height: 20),
                         Text(
-                          'Muted',
-                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          _connectionStatus,
+                          style: const TextStyle(color: Colors.white, fontSize: 16),
+                        ),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Connecting to User B\'s camera...',
+                          style: TextStyle(color: Colors.white70, fontSize: 14),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (_remoteRenderer.srcObject != null)
+                  // Display actual video stream - FULLSCREEN
+                  Positioned.fill(
+                    child: RTCVideoView(
+                      _remoteRenderer,
+                      mirror: isFront,
+                      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover, // Fill screen
+                    ),
+                  )
+                else
+                  Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          isFront ? Icons.camera_front : Icons.camera_rear,
+                          size: 100,
+                          color: Colors.white70,
+                        ),
+                        const SizedBox(height: 20),
+                        const Text(
+                          'Waiting for stream...',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Status: $_connectionStatus',
+                          style: const TextStyle(color: Colors.white70, fontSize: 14),
                         ),
                       ],
                     ),
                   ),
-                ),
 
-              // Stop Stream Button
-              Positioned(
-                bottom: 30,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.stop_circle),
-                    label: const Text('STOP VIEWING'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                // Mute Indicator
+                if (_isMuted)
+                  Positioned(
+                    top: 20,
+                    left: 20,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.mic_off, color: Colors.white, size: 16),
+                          SizedBox(width: 6),
+                          Text(
+                            'Muted',
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
                     ),
-                    onPressed: _stopStream,
+                  ),
+
+                // Stop Stream Button
+                Positioned(
+                  bottom: 30,
+                  left: 0,
+                  right: 0,
+                  child: Center(
+                    child: ElevatedButton.icon(
+                      icon: const Icon(Icons.stop_circle),
+                      label: const Text('STOP VIEWING'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+                      ),
+                      onPressed: _stopStream,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           );
         },
       ),

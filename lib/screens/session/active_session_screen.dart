@@ -48,6 +48,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     }
   }
   
+  int _lastViewerRetry = -1;
+  
   void _listenForViewerReady() {
     // Listen for viewer ready signal to create fresh offer
     FirebaseFirestore.instance
@@ -59,12 +61,21 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         final data = snapshot.data();
         if (data != null && data['viewerReady'] == true) {
           final timestamp = data['viewerTimestamp'] as Timestamp?;
-          print('📡 Viewer ready signal received at ${timestamp?.toDate()}');
+          final viewerRetry = data['viewerRetry'] as int? ?? 0;
+          print('📡 Viewer ready signal received at ${timestamp?.toDate()}, retry: $viewerRetry');
           
-          // Create fresh offer for the viewer
+          // Create fresh offer for the viewer (initial or retry)
           if (_webrtcService != null && _isStreamInitialized) {
-            print('📤 Creating fresh offer for viewer...');
-            _webrtcService!.createOffer();
+            // Only create offer if this is a new retry attempt or first request
+            if (viewerRetry != _lastViewerRetry) {
+              print('📤 Creating fresh offer for viewer (retry: $viewerRetry)...');
+              _lastViewerRetry = viewerRetry;
+              _webrtcService!.createOffer();
+            } else {
+              print('⏭️ Skipping duplicate viewerReady signal');
+            }
+          } else {
+            print('⚠️ Cannot create offer - service not ready (initialized: $_isStreamInitialized)');
           }
         }
       }

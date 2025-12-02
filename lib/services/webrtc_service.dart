@@ -44,8 +44,28 @@ class WebRTCService {
       // Handle remote stream
       _peerConnection!.onTrack = (RTCTrackEvent event) {
         print('📺 Remote track received: ${event.track.kind}');
+        print('📊 Track ID: ${event.track.id}, enabled: ${event.track.enabled}');
+        
+        // Explicitly enable audio tracks
+        if (event.track.kind == 'audio') {
+          event.track.enabled = true;
+          print('🔊 Audio track explicitly enabled');
+        }
+        
         if (event.streams.isNotEmpty) {
           _remoteStream = event.streams[0];
+          
+          // Log all tracks in the stream
+          final audioTracks = _remoteStream!.getAudioTracks();
+          final videoTracks = _remoteStream!.getVideoTracks();
+          print('📊 Remote stream tracks - audio: ${audioTracks.length}, video: ${videoTracks.length}');
+          
+          // Ensure all audio tracks are enabled
+          for (var track in audioTracks) {
+            track.enabled = true;
+            print('🔊 Remote audio track ${track.id} enabled');
+          }
+          
           onRemoteStream?.call(_remoteStream!);
         }
       };
@@ -80,6 +100,8 @@ class WebRTCService {
           'echoCancellation': true,
           'noiseSuppression': true,
           'autoGainControl': true,
+          'sampleRate': 48000,
+          'channelCount': 1,
         },
         'video': {
           'facingMode': facingMode ?? 'user',
@@ -200,8 +222,28 @@ class WebRTCService {
     try {
       print('📤 Creating offer...');
       
-      final offer = await _peerConnection!.createOffer();
+      // Verify local stream has tracks
+      if (_localStream != null) {
+        final audioTracks = _localStream!.getAudioTracks();
+        final videoTracks = _localStream!.getVideoTracks();
+        print('📊 Local stream tracks - audio: ${audioTracks.length}, video: ${videoTracks.length}');
+        
+        // Ensure audio tracks are enabled
+        for (var track in audioTracks) {
+          track.enabled = true;
+          print('🔊 Audio track ${track.id} enabled: ${track.enabled}');
+        }
+      }
+      
+      final offer = await _peerConnection!.createOffer({
+        'offerToReceiveAudio': true,
+        'offerToReceiveVideo': true,
+      });
       await _peerConnection!.setLocalDescription(offer);
+      
+      // Wait a bit for ICE gathering to collect candidates
+      print('🧊 Waiting for ICE gathering...');
+      await Future.delayed(const Duration(milliseconds: 500));
 
       await FirebaseFirestore.instance
           .collection('webrtc_signaling')
