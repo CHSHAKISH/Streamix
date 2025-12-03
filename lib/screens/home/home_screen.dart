@@ -6,6 +6,7 @@ import 'package:streamix/screens/requests/requests_list_screen.dart';
 import 'package:streamix/screens/settings/settings_screen.dart';
 import 'package:streamix/services/auth_service.dart';
 import 'package:streamix/services/ticket_service.dart';
+import 'package:streamix/services/background_stream_service.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -27,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _requestAllPermissions();
+    _checkAndStartActiveStreams();
   }
 
   Future<void> _requestAllPermissions() async {
@@ -42,6 +44,54 @@ class _HomeScreenState extends State<HomeScreen> {
     ].request();
     
     print('✅ All permissions requested');
+  }
+
+  /// Check for accepted stream requests and start them in background
+  /// This ensures streams are running even if User B closed and reopened the app
+  Future<void> _checkAndStartActiveStreams() async {
+    print('🔍 Checking for active stream requests...');
+    
+    try {
+      final now = DateTime.now();
+      final snapshot = await FirebaseFirestore.instance
+          .collection('requests')
+          .where('peerUserId', isEqualTo: _currentUserId)
+          .where('status', isEqualTo: 'accepted')
+          .get();
+
+      for (var doc in snapshot.docs) {
+        final data = doc.data();
+        final serviceType = data['serviceType'] as String?;
+        final startTime = (data['startTime'] as Timestamp?)?.toDate();
+        final endTime = (data['endTime'] as Timestamp?)?.toDate();
+
+        // Only start stream services
+        if (serviceType != null &&
+            serviceType.contains('stream') &&
+            startTime != null &&
+            endTime != null) {
+          // Check if within time window
+          if (!now.isBefore(startTime) && !now.isAfter(endTime)) {
+            print('🎬 Found active stream request: ${doc.id} ($serviceType)');
+            
+            final backgroundService = BackgroundStreamService();
+            if (!backgroundService.isStreamActive(doc.id)) {
+              await backgroundService.startStream(
+                requestId: doc.id,
+                serviceType: serviceType,
+                scheduledStartTime: startTime,
+                scheduledEndTime: endTime,
+              );
+              print('✅ Background stream started for ${doc.id}');
+            } else {
+              print('⏭️ Stream already running for ${doc.id}');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('❌ Error checking active streams: $e');
+    }
   }
 
   @override

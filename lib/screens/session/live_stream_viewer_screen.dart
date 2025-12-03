@@ -110,12 +110,15 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
       }
       
       // Signal to broadcaster that viewer is ready to connect
+      // Use a unique timestamp to ensure broadcaster creates fresh offer
       await FirebaseFirestore.instance
           .collection('webrtc_signaling')
           .doc(widget.requestId)
           .set({
         'viewerReady': true,
         'viewerTimestamp': FieldValue.serverTimestamp(),
+        'viewerDisconnected': false,
+        'viewerConnectionId': DateTime.now().millisecondsSinceEpoch, // Force unique connection
       }, SetOptions(merge: true));
       
       print('📡 Signaled broadcaster that viewer is ready');
@@ -156,11 +159,13 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
             print('🎞️ Video track found: id=${v.id}, kind=${v.kind}');
           }
 
-          setState(() {
-            _remoteRenderer.srcObject = stream;
-            _isConnecting = false;
-            _connectionStatus = 'Connected';
-          });
+          if (mounted) {
+            setState(() {
+              _remoteRenderer.srcObject = stream;
+              _isConnecting = false;
+              _connectionStatus = 'Connected';
+            });
+          }
 
           if (videoTracks.isEmpty) {
             print('⚠️ Remote stream has no video tracks - viewer will see a black/white screen');
@@ -171,9 +176,11 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
           }
         },
         onConnectionStateChange: (state) {
-          setState(() {
-            _connectionStatus = state;
-          });
+          if (mounted) {
+            setState(() {
+              _connectionStatus = state;
+            });
+          }
         },
       );
 
@@ -240,19 +247,27 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
   }
 
   Future<void> _stopStream() async {
-    // Set status to stopped by requester
-    await FirebaseFirestore.instance
-        .collection('requests')
-        .doc(widget.requestId)
-        .update({
-      'status': 'stopped_by_requester',
-      'remoteCommand': 'STOP',
-    });
+    try {
+      // Set status to stopped by requester
+      await FirebaseFirestore.instance
+          .collection('requests')
+          .doc(widget.requestId)
+          .update({
+        'status': 'stopped_by_requester',
+        'remoteCommand': 'STOP',
+      });
+      
+      print('✅ Stop signal sent to broadcaster');
+    } catch (e) {
+      print('⚠️ Error sending stop signal: $e');
+    }
     
     await _cleanup();
     
+    // Navigate back to previous screen (chat)
     if (mounted) {
-      Navigator.pop(context);
+      print('🔙 Navigating back to chat');
+      Navigator.of(context).pop();
     }
   }
 
@@ -266,25 +281,27 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
 
   Future<void> _cleanupConnection() async {
     // Close WebRTC connection
-    print('🧹 Viewer cleanup: closing WebRTC and cleaning signaling for fresh reconnection');
+    print('🧹 Viewer cleanup: closing WebRTC and clearing old signaling');
     await _webrtcService?.dispose(cleanupSignaling: false);
     await _remoteRenderer.dispose();
     
-    // Clean old signaling data to allow fresh connection on reconnect
+    // Delete old offer/answer and signal disconnect
+    // This forces fresh negotiation on reconnection
     try {
-      // First clean up old ICE candidates
+      // First delete old ICE candidates
       final candidatesSnapshot = await FirebaseFirestore.instance
           .collection('webrtc_signaling')
           .doc(widget.requestId)
           .collection('candidates')
+          .where('senderId', isEqualTo: 'viewer')
           .get();
       
       for (var doc in candidatesSnapshot.docs) {
         await doc.reference.delete();
       }
-      print('✅ Old ICE candidates cleaned');
+      print('✅ Cleaned viewer ICE candidates');
       
-      // Then reset signaling document
+      // Then update signaling document
       await FirebaseFirestore.instance
           .collection('webrtc_signaling')
           .doc(widget.requestId)
@@ -292,13 +309,12 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
         'viewerReady': false,
         'viewerDisconnected': true,
         'viewerDisconnectTime': FieldValue.serverTimestamp(),
-        // Remove old offer/answer to force fresh negotiation
-        'offer': FieldValue.delete(),
-        'answer': FieldValue.delete(),
+        'offer': FieldValue.delete(),  // Delete old offer
+        'answer': FieldValue.delete(), // Delete old answer
       }, SetOptions(merge: true));
-      print('✅ Viewer disconnect - old signaling data cleaned for fresh reconnect');
+      print('✅ Viewer disconnect - cleared old signaling for fresh reconnect');
     } catch (e) {
-      print('⚠️ Failed to clean signaling data: $e');
+      print('⚠️ Failed to clean signaling: $e');
     }
   }
 

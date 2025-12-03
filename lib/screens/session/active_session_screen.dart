@@ -63,7 +63,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         if (data != null && data['viewerDisconnected'] == true && data['viewerReady'] == false) {
           print('👋 Viewer disconnected, ready for reconnection');
           _lastViewerTimestamp = null; // Reset timestamp for next connection
-          return;
+          return; // Wait for viewer to reconnect
         }
         
         if (data != null && data['viewerReady'] == true) {

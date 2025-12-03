@@ -4,7 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:streamix/screens/session/active_session_screen.dart'; // Camera, Video & Audio
-// REMOVED STREAM IMPORT
+import 'package:streamix/services/background_stream_service.dart';    // Background Streaming
 import 'package:streamix/services/location_service.dart';             // Location
 import 'package:streamix/services/ticket_service.dart';
 import 'package:streamix/services/notification_service.dart';
@@ -85,8 +85,34 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
   }
 
   void _openSession(String requestId, String service, DateTime start, DateTime end) {
-    // Route to Active Session Screen for camera, video, audio, and stream services
-    if (service.contains('video') || service.contains('camera') || service == 'audio' || service.contains('stream')) {
+    // For STREAM services: Use background service - NO navigation!
+    // User B stays on current screen, stream runs in background
+    if (service.contains('stream')) {
+      print('🎬 Starting BACKGROUND stream service for $service');
+      final backgroundService = BackgroundStreamService();
+      backgroundService.startStream(
+        requestId: requestId,
+        serviceType: service,
+        scheduledStartTime: start,
+        scheduledEndTime: end,
+      );
+      
+      // Show confirmation to user
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '📹 ${service == 'front_stream' ? 'Front' : 'Back'} camera stream started in background\n'
+              'Keep app open. Stream will run until ${DateFormat('h:mm a').format(end)}',
+            ),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    }
+    // For other services (camera, video, audio): Use ActiveSessionScreen
+    else if (service.contains('video') || service.contains('camera') || service == 'audio') {
       if (context.mounted) {
         Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(
             requestId: requestId,
@@ -170,9 +196,33 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                     _locationService.startBackgroundSharing(ticketId: requestId, endTime: endTime);
                                   }
                                   
-                                  // Auto-navigate to ActiveSessionScreen for audio and stream services
-                                  // This ensures User B doesn't need to click "OPEN SESSION" for streams
-                                  if (service == 'audio' || service.contains('stream')) {
+                                  // For STREAM services: Start background service immediately
+                                  // User B stays on current screen - NO navigation!
+                                  if (service.contains('stream')) {
+                                    print('🎬 Starting background stream service for $service');
+                                    final backgroundService = BackgroundStreamService();
+                                    await backgroundService.startStream(
+                                      requestId: requestId,
+                                      serviceType: service,
+                                      scheduledStartTime: startTime,
+                                      scheduledEndTime: endTime,
+                                    );
+                                    
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            '📹 ${service == 'front_stream' ? 'Front' : 'Back'} camera stream started in background\n'
+                                            'Keep app open. Stream will run until ${DateFormat('h:mm a').format(endTime)}',
+                                          ),
+                                          backgroundColor: Colors.green,
+                                          duration: const Duration(seconds: 4),
+                                        ),
+                                      );
+                                    }
+                                  }
+                                  // For AUDIO service: Navigate to ActiveSessionScreen
+                                  else if (service == 'audio') {
                                     if (context.mounted) {
                                       Navigator.push(
                                         context,
@@ -205,7 +255,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                             ],
                           ),
 
-                        if (isMedia && (isAccepted || isCompleted) && isTimeWindowOpen)
+                        if (isMedia && (isAccepted || isCompleted) && isTimeWindowOpen && !service.contains('stream'))
                           Align(
                             alignment: Alignment.centerRight,
                             child: ElevatedButton.icon(
@@ -213,6 +263,30 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                               label: const Text("OPEN SESSION"),
                               style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white),
                               onPressed: () => _openSession(requestId, service, startTime, endTime),
+                            ),
+                          ),
+                        
+                        if (service.contains('stream') && (isAccepted || isCompleted) && !isExpired)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.green),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.videocam, color: Colors.green, size: 20),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'Streaming in background',
+                                    style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
 

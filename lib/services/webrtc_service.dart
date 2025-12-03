@@ -26,30 +26,45 @@ class WebRTCService {
     try {
       print('🌐 WebRTC initializing... isInitiator: $isInitiator');
       
-      // Create peer connection
+      // Create peer connection with multiple STUN servers for better connectivity
       _peerConnection = await createPeerConnection({
         'iceServers': [
           {'urls': 'stun:stun.l.google.com:19302'},
           {'urls': 'stun:stun1.l.google.com:19302'},
-        ]
+          {'urls': 'stun:stun2.l.google.com:19302'},
+          {'urls': 'stun:stun3.l.google.com:19302'},
+          {'urls': 'stun:stun4.l.google.com:19302'},
+        ],
+        'sdpSemantics': 'unified-plan',
+        'iceTransportPolicy': 'all',
       });
 
       // Monitor connection state
       _peerConnection!.onConnectionState = (state) {
         print('🔗 Connection state: $state');
         onConnectionStateChange?.call(state.toString());
+        
+        // Handle connection failure
+        if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+          print('❌ Connection failed! Attempting recovery...');
+          // Don't dispose yet - let ICE candidates continue trying
+        }
+      };
+      
+      // Monitor ICE connection state separately
+      _peerConnection!.onIceConnectionState = (state) {
+        print('🧊 ICE connection state: $state');
+        if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+          print('❌ ICE connection failed!');
+        } else if (state == RTCIceConnectionState.RTCIceConnectionStateConnected) {
+          print('✅ ICE connection established!');
+        }
       };
 
       // Handle remote stream
       _peerConnection!.onTrack = (RTCTrackEvent event) {
         print('📺 Remote track received: ${event.track.kind}');
         print('📊 Track ID: ${event.track.id}, enabled: ${event.track.enabled}');
-        
-        // Explicitly enable audio tracks
-        if (event.track.kind == 'audio') {
-          event.track.enabled = true;
-          print('🔊 Audio track explicitly enabled');
-        }
         
         if (event.streams.isNotEmpty) {
           _remoteStream = event.streams[0];
@@ -59,10 +74,16 @@ class WebRTCService {
           final videoTracks = _remoteStream!.getVideoTracks();
           print('📊 Remote stream tracks - audio: ${audioTracks.length}, video: ${videoTracks.length}');
           
-          // Ensure all audio tracks are enabled
+          // CRITICAL: Enable all audio tracks
           for (var track in audioTracks) {
             track.enabled = true;
-            print('🔊 Remote audio track ${track.id} enabled');
+            print('🔊 Audio track ${track.id} enabled for playback');
+          }
+          
+          // Enable all video tracks
+          for (var track in videoTracks) {
+            track.enabled = true;
+            print('🎥 Video track ${track.id} enabled');
           }
           
           onRemoteStream?.call(_remoteStream!);
@@ -95,13 +116,7 @@ class WebRTCService {
       print('📹 Creating local stream with camera: $cameraId, facing: $facingMode');
       
       final Map<String, dynamic> mediaConstraints = {
-        'audio': {
-          'echoCancellation': true,
-          'noiseSuppression': true,
-          'autoGainControl': true,
-          'sampleRate': 48000,
-          'channelCount': 1,
-        },
+        'audio': true, // Enable audio - must be true for audio to work!
         'video': {
           'facingMode': facingMode ?? 'user',
           'width': {'ideal': 1280},
@@ -114,12 +129,24 @@ class WebRTCService {
 
       _localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
       
-      // Verify which camera was actually selected
+      // Verify tracks and enable audio
       if (_localStream != null) {
         final videoTracks = _localStream!.getVideoTracks();
+        final audioTracks = _localStream!.getAudioTracks();
+        
         if (videoTracks.isNotEmpty) {
           print('✅ Video track selected: ${videoTracks[0].label}');
           print('✅ Video track settings: ${videoTracks[0].getSettings()}');
+        }
+        
+        if (audioTracks.isNotEmpty) {
+          // Explicitly enable audio
+          for (var track in audioTracks) {
+            track.enabled = true;
+            print('✅ Audio track enabled: ${track.label}, enabled: ${track.enabled}');
+          }
+        } else {
+          print('⚠️ No audio tracks in local stream!');
         }
       }
       
@@ -173,13 +200,14 @@ class WebRTCService {
             final currentState = _peerConnection?.signalingState;
             print('🔍 Viewer state: $currentState');
             
-            // Process offer if in stable state or if state is null (connection just initialized)
-            if (currentState == RTCSignalingState.RTCSignalingStateStable || 
-                currentState == null) {
-              print('📩 Received offer, processing...');
+            // Only process offer if in stable state or null (new connection)
+            // Use _remoteStream to check if we already have a connection
+            if ((currentState == RTCSignalingState.RTCSignalingStateStable || currentState == null) && 
+                _remoteStream == null) {
+              print('📩 Received NEW offer, processing...');
               await _handleOffer(data['offer']);
             } else {
-              print('⏭️ Skipping offer - wrong state: $currentState');
+              print('⏭️ Skipping offer - state: $currentState, hasRemoteStream: ${_remoteStream != null}');
             }
           } else {
             print('⚠️ Viewer: No offer in snapshot yet');
