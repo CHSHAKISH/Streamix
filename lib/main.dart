@@ -10,14 +10,8 @@ import 'firebase_options.dart';
 import 'package:streamix/services/auth_service.dart';
 import 'package:streamix/services/notification_service.dart';
 import 'package:streamix/widgets/global_camera_listener.dart';
-import 'package:streamix/widgets/notification_listener.dart' show InAppNotificationListener;
-
-// Top-level background handler
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  print("Handling a background message: ${message.messageId}");
-}
+import 'package:streamix/widgets/notification_listener.dart'
+    show InAppNotificationListener;
 
 // Global Navigator Key
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -33,12 +27,10 @@ Future<void> main() async {
   );
 
   // 2. Init Firebase
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  // 3. Setup Background Handler
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  // 3. Setup Background Handler (use function from notification_service.dart)
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
   // 4. RUN APP IMMEDIATELY
   runApp(
@@ -90,13 +82,19 @@ class _StreamixAppState extends State<StreamixApp> {
           elevation: 0,
           centerTitle: true,
           iconTheme: IconThemeData(color: Color(0xFF007A7A)),
-          titleTextStyle: TextStyle(color: Color(0xFF007A7A), fontSize: 20, fontWeight: FontWeight.bold),
+          titleTextStyle: TextStyle(
+            color: Color(0xFF007A7A),
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: const Color(0xFF007A7A),
             foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
           ),
         ),
       ),
@@ -109,14 +107,16 @@ class _StreamixAppState extends State<StreamixApp> {
           elevation: 0,
           centerTitle: true,
           iconTheme: IconThemeData(color: Color(0xFF00C2C2)),
-          titleTextStyle: TextStyle(color: Color(0xFF00C2C2), fontSize: 20, fontWeight: FontWeight.bold),
+          titleTextStyle: TextStyle(
+            color: Color(0xFF00C2C2),
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ),
       // Wrap with GlobalCameraHandler for remote camera triggering
       home: GlobalCameraHandler(
-        child: InAppNotificationListener(
-          child: const AuthWrapper(),
-        ),
+        child: InAppNotificationListener(child: const AuthWrapper()),
       ),
     );
   }

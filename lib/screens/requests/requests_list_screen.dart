@@ -3,7 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:streamix/screens/session/active_session_screen.dart'; // Camera, Video & Audio
 // REMOVED STREAM IMPORT
 import 'package:streamix/services/location_service.dart';             // Location
@@ -164,20 +163,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                               ElevatedButton(
                                 style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
                                 onPressed: () async {
-                                  // Request appropriate permissions
-                                  if (isLocation) {
-                                    await Permission.location.request();
-                                  } else if (service.contains('camera') || service.contains('video') || service.contains('stream')) {
-                                    // Request camera permission for camera, video, and stream services
-                                    await Permission.camera.request();
-                                    // Also request microphone for video and stream services
-                                    if (service.contains('video') || service.contains('stream')) {
-                                      await Permission.microphone.request();
-                                    }
-                                  } else if (service == 'audio') {
-                                    await Permission.microphone.request();
-                                  }
-
+                                  // Permissions are requested at app startup, just accept the request
                                   await _ticketService.updateRequestStatus(requestId, true);
                                   
                                   if (isLocation && isTimeWindowOpen) {
@@ -185,6 +171,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                                   }
                                   
                                   // Auto-navigate to ActiveSessionScreen for audio and stream services
+                                  // This ensures User B doesn't need to click "OPEN SESSION" for streams
                                   if (service == 'audio' || service.contains('stream')) {
                                     if (context.mounted) {
                                       Navigator.push(

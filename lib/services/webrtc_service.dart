@@ -9,7 +9,6 @@ class WebRTCService {
   StreamSubscription? _offerSubscription;
   StreamSubscription? _answerSubscription;
   StreamSubscription? _candidateSubscription;
-  bool _hasProcessedOffer = false; // Track if viewer has processed an offer
 
   final String requestId;
   final bool isInitiator; // true for User B (broadcaster), false for User A (viewer)
@@ -171,12 +170,6 @@ class WebRTCService {
           final data = snapshot.data();
           print('📬 Viewer data: ${data?.keys}');
           if (data != null && data['offer'] != null) {
-            // Check if we've already processed an offer
-            if (_hasProcessedOffer) {
-              print('⏭️ Already processed an offer, skipping');
-              return;
-            }
-            
             final currentState = _peerConnection?.signalingState;
             print('🔍 Viewer state: $currentState');
             
@@ -184,7 +177,6 @@ class WebRTCService {
             if (currentState == RTCSignalingState.RTCSignalingStateStable || 
                 currentState == null) {
               print('📩 Received offer, processing...');
-              _hasProcessedOffer = true; // Mark as processed
               await _handleOffer(data['offer']);
             } else {
               print('⏭️ Skipping offer - wrong state: $currentState');
@@ -358,9 +350,6 @@ class WebRTCService {
 
   Future<void> dispose({bool cleanupSignaling = true}) async {
     print('🧹 Disposing WebRTC service... cleanupSignaling=$cleanupSignaling');
-    
-    // Reset processed flag for next connection
-    _hasProcessedOffer = false;
     
     await _offerSubscription?.cancel();
     await _answerSubscription?.cancel();

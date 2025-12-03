@@ -38,17 +38,16 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   @override
   void initState() {
     super.initState();
-    _checkSchedule();
+    _checkScheduleAndAutoStart();
     
-    // For stream services, initialize immediately when User B accepts
+    // For stream services, always listen for viewer and stop commands
     if (widget.serviceType.contains('stream')) {
-      _initializeStreamingImmediately();
       _listenForStopCommand();
       _listenForViewerReady();
     }
   }
   
-  int _lastViewerRetry = -1;
+  Timestamp? _lastViewerTimestamp;
   
   void _listenForViewerReady() {
     // Listen for viewer ready signal to create fresh offer
@@ -59,23 +58,50 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         .listen((snapshot) {
       if (snapshot.exists) {
         final data = snapshot.data();
+        
+        // Detect viewer disconnect to prepare for reconnection
+        if (data != null && data['viewerDisconnected'] == true && data['viewerReady'] == false) {
+          print('👋 Viewer disconnected, ready for reconnection');
+          _lastViewerTimestamp = null; // Reset timestamp for next connection
+          return;
+        }
+        
         if (data != null && data['viewerReady'] == true) {
           final timestamp = data['viewerTimestamp'] as Timestamp?;
           final viewerRetry = data['viewerRetry'] as int? ?? 0;
           print('📡 Viewer ready signal received at ${timestamp?.toDate()}, retry: $viewerRetry');
           
-          // Create fresh offer for the viewer (initial or retry)
-          if (_webrtcService != null && _isStreamInitialized) {
-            // Only create offer if this is a new retry attempt or first request
-            if (viewerRetry != _lastViewerRetry) {
-              print('📤 Creating fresh offer for viewer (retry: $viewerRetry)...');
-              _lastViewerRetry = viewerRetry;
+          // Create fresh offer for the viewer (initial or reconnection)
+          if (_webrtcService != null && _isStreamInitialized && _localRenderer.srcObject != null) {
+            // Check if this is a new viewer connection based on timestamp
+            bool isNewConnection = _lastViewerTimestamp == null || 
+                                   timestamp == null || 
+                                   timestamp.seconds != _lastViewerTimestamp!.seconds;
+            
+            if (isNewConnection) {
+              print('📤 Creating fresh offer for viewer (new connection or retry: $viewerRetry)...');
+              print('📊 Local stream status: hasVideo=${_localRenderer.srcObject != null}, tracks=${_webrtcService!.localStream?.getTracks().length}');
+              _lastViewerTimestamp = timestamp;
               _webrtcService!.createOffer();
             } else {
-              print('⏭️ Skipping duplicate viewerReady signal');
+              print('⏭️ Skipping duplicate viewerReady signal (same timestamp)');
             }
           } else {
-            print('⚠️ Cannot create offer - service not ready (initialized: $_isStreamInitialized)');
+            print('⚠️ Cannot create offer - service not ready');
+            print('   - WebRTC service: ${_webrtcService != null}');
+            print('   - Stream initialized: $_isStreamInitialized');
+            print('   - Local renderer has stream: ${_localRenderer.srcObject != null}');
+            
+            // If stream not ready, wait a bit and retry
+            if (_webrtcService != null && !_isStreamInitialized) {
+              print('🔄 Stream initializing, will create offer when ready...');
+              Future.delayed(const Duration(milliseconds: 1000), () {
+                if (_webrtcService != null && _isStreamInitialized && _localRenderer.srcObject != null) {
+                  print('✅ Stream now ready, creating offer for waiting viewer...');
+                  _webrtcService!.createOffer();
+                }
+              });
+            }
           }
         }
       }
@@ -104,6 +130,8 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   }
   
   Future<void> _handleStop() async {
+    print('🛑 Handling stop command from User A...');
+    await _cleanupStreaming();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -119,8 +147,6 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
   }
   
   Future<void> _initializeStreamingImmediately() async {
-    // Small delay to ensure UI is ready
-    await Future.delayed(const Duration(milliseconds: 500));
     print('🚀 Auto-initializing stream for ${widget.serviceType}...');
     
     setState(() {
@@ -191,6 +217,7 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
           _statusMessage = "🎥 Stream Ready - Waiting for User A to connect";
         });
         print('✅ Local stream set to renderer');
+        print('📊 Local stream tracks: audio=${_webrtcService!.localStream!.getAudioTracks().length}, video=${_webrtcService!.localStream!.getVideoTracks().length}');
       } else {
         print('⚠️ Local stream is null!');
         setState(() {
@@ -199,13 +226,23 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         return;
       }
       
-      // Create offer for User A to connect
+      // Create initial offer for User A to connect
       await _webrtcService!.createOffer();
       
-      print('✅ Streaming initialized and offer sent');
+      print('✅ Streaming initialized and initial offer sent');
       setState(() {
         _statusMessage = "📡 Broadcasting - User A can now view the stream";
       });
+      
+      // Signal that broadcaster is ready
+      await FirebaseFirestore.instance
+          .collection('webrtc_signaling')
+          .doc(widget.requestId)
+          .set({
+        'broadcasterReady': true,
+        'broadcasterReadyTime': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      print('✅ Signaled that broadcaster is ready');
     } catch (e) {
       print('❌ Error initializing streaming: $e');
       print('Stack trace: ${StackTrace.current}');
@@ -251,15 +288,18 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
     super.dispose();
   }
 
-  // --- 1. SCHEDULE LOGIC ---
-  void _checkSchedule() {
+  // --- 1. SCHEDULE LOGIC WITH AUTO-START FOR STREAMS ---
+  void _checkScheduleAndAutoStart() {
     final now = DateTime.now();
+    final isStream = widget.serviceType.contains('stream');
 
-    // A. Too Early -> Wait
+    // A. Too Early -> Wait and auto-start at scheduled time
     if (now.isBefore(widget.scheduledStartTime)) {
       final waitDuration = widget.scheduledStartTime.difference(now);
       setState(() {
-        _statusMessage = "Auto-start in ${waitDuration.inMinutes}:${(waitDuration.inSeconds % 60).toString().padLeft(2, '0')}";
+        _statusMessage = isStream 
+            ? "Stream will auto-start in ${waitDuration.inMinutes}:${(waitDuration.inSeconds % 60).toString().padLeft(2, '0')}"
+            : "Auto-start in ${waitDuration.inMinutes}:${(waitDuration.inSeconds % 60).toString().padLeft(2, '0')}";
       });
 
       // Update countdown every second until start time
@@ -267,13 +307,21 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         final timeLeft = widget.scheduledStartTime.difference(DateTime.now());
         if (timeLeft.isNegative) {
           timer.cancel();
-          setState(() {
-            _statusMessage = "Camera Ready for Remote Capture";
-          });
+          // Auto-start streaming when time is reached
+          if (isStream) {
+            print('⏰ Scheduled start time reached, auto-starting stream...');
+            _initializeStreamingImmediately();
+          } else {
+            setState(() {
+              _statusMessage = "Camera Ready for Remote Capture";
+            });
+          }
         } else {
           if (mounted) {
             setState(() {
-              _statusMessage = "Auto-start in ${timeLeft.inHours}:${(timeLeft.inMinutes % 60).toString().padLeft(2, '0')}:${(timeLeft.inSeconds % 60).toString().padLeft(2, '0')}";
+              _statusMessage = isStream
+                  ? "Stream will auto-start in ${timeLeft.inHours}:${(timeLeft.inMinutes % 60).toString().padLeft(2, '0')}:${(timeLeft.inSeconds % 60).toString().padLeft(2, '0')}"
+                  : "Auto-start in ${timeLeft.inHours}:${(timeLeft.inMinutes % 60).toString().padLeft(2, '0')}:${(timeLeft.inSeconds % 60).toString().padLeft(2, '0')}";
             });
           }
         }
@@ -286,20 +334,39 @@ class _ActiveSessionScreenState extends State<ActiveSessionScreen> {
         Navigator.pop(context);
       }
     }
-    // C. On Time -> Show standby message for camera/video/audio/stream services
+    // C. On Time -> Auto-start streaming or show standby
     else {
-      bool isVideo = widget.serviceType.contains('video');
-      bool isAudio = widget.serviceType == 'audio';
-      bool isStream = widget.serviceType.contains('stream');
-      setState(() {
-        _statusMessage = isVideo 
-            ? "Video Ready for Remote Recording" 
-            : isAudio
-                ? "Audio Ready for Remote Recording"
-                : isStream
-                    ? "Stream Ready - Camera Active"
-                    : "Camera Ready for Remote Capture";
-      });
+      if (isStream) {
+        // Stream service: auto-start immediately
+        print('✅ Within scheduled time window, auto-starting stream...');
+        _initializeStreamingImmediately();
+        
+        // Schedule auto-stop at end time
+        final timeUntilEnd = widget.scheduledEndTime.difference(now);
+        Timer(timeUntilEnd, () {
+          if (mounted) {
+            print('⏰ Scheduled end time reached, auto-stopping stream...');
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('⏰ Session time ended, stream stopped'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+            Navigator.pop(context);
+          }
+        });
+      } else {
+        // Other services: show standby
+        bool isVideo = widget.serviceType.contains('video');
+        bool isAudio = widget.serviceType == 'audio';
+        setState(() {
+          _statusMessage = isVideo 
+              ? "Video Ready for Remote Recording" 
+              : isAudio
+                  ? "Audio Ready for Remote Recording"
+                  : "Camera Ready for Remote Capture";
+        });
+      }
     }
   }
 

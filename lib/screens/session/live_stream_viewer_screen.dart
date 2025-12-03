@@ -34,6 +34,81 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
     try {
       print('🔄 Viewer initializing connection...');
       
+      setState(() {
+        _connectionStatus = 'Waiting for broadcaster...';
+      });
+      
+      // First, check if broadcaster is ready
+      final signalingDoc = await FirebaseFirestore.instance
+          .collection('webrtc_signaling')
+          .doc(widget.requestId)
+          .get();
+      
+      if (signalingDoc.exists) {
+        final data = signalingDoc.data();
+        
+        // Check for broadcaster errors
+        if (data != null && data['broadcasterError'] != null) {
+          print('⚠️ Broadcaster reported error: ${data['broadcasterError']}');
+          setState(() {
+            _isConnecting = false;
+            _connectionStatus = 'Broadcaster Error: ${data['broadcasterError']}';
+          });
+          return;
+        }
+        
+        // Check if broadcaster is ready
+        final broadcasterReady = data?['broadcasterReady'] as bool?;
+        if (broadcasterReady != true) {
+          print('⏳ Broadcaster not ready yet, waiting...');
+          setState(() {
+            _connectionStatus = 'Waiting for broadcaster to start stream...';
+          });
+          
+          // Wait up to 10 seconds for broadcaster to be ready
+          int waitAttempts = 0;
+          while (waitAttempts < 20 && mounted) {
+            await Future.delayed(const Duration(milliseconds: 500));
+            waitAttempts++;
+            
+            final updatedDoc = await FirebaseFirestore.instance
+                .collection('webrtc_signaling')
+                .doc(widget.requestId)
+                .get();
+            
+            if (updatedDoc.exists) {
+              final updatedData = updatedDoc.data();
+              if (updatedData?['broadcasterReady'] == true) {
+                print('✅ Broadcaster is now ready!');
+                break;
+              }
+            }
+            
+            if (waitAttempts % 4 == 0) {
+              print('⏳ Still waiting for broadcaster... (${waitAttempts / 2}s)');
+            }
+          }
+          
+          if (waitAttempts >= 20) {
+            setState(() {
+              _isConnecting = false;
+              _connectionStatus = 'Broadcaster not responding';
+            });
+            return;
+          }
+        } else {
+          print('✅ Broadcaster is ready');
+        }
+      } else {
+        print('⚠️ No signaling document found, broadcaster may not have started');
+        setState(() {
+          _connectionStatus = 'Waiting for broadcaster to start...';
+        });
+        
+        // Wait a bit for broadcaster to start
+        await Future.delayed(const Duration(seconds: 2));
+      }
+      
       // Signal to broadcaster that viewer is ready to connect
       await FirebaseFirestore.instance
           .collection('webrtc_signaling')
@@ -44,24 +119,6 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
       }, SetOptions(merge: true));
       
       print('📡 Signaled broadcaster that viewer is ready');
-      
-      // Check if broadcaster reported any errors
-      final signalingDoc = await FirebaseFirestore.instance
-          .collection('webrtc_signaling')
-          .doc(widget.requestId)
-          .get();
-      
-      if (signalingDoc.exists) {
-        final data = signalingDoc.data();
-        if (data != null && data['broadcasterError'] != null) {
-          print('⚠️ Broadcaster reported error: ${data['broadcasterError']}');
-          setState(() {
-            _isConnecting = false;
-            _connectionStatus = 'Broadcaster Error: ${data['broadcasterError']}';
-          });
-          return;
-        }
-      }
       
       // Initialize video renderer
       await _remoteRenderer.initialize();
@@ -201,16 +258,48 @@ class _LiveStreamViewerScreenState extends State<LiveStreamViewerScreen> {
 
   @override
   void dispose() {
-    // Clean up viewer connection completely when closing
-    print('👋 Viewer closing, cleaning up connection...');
+    // Clean up viewer connection but preserve signaling for reconnection
+    print('👋 Viewer closing, cleaning up connection but preserving signaling...');
     _cleanupConnection();
     super.dispose();
   }
 
   Future<void> _cleanupConnection() async {
-    // Close WebRTC but DON'T clean signaling (broadcaster keeps it)
+    // Close WebRTC connection
+    print('🧹 Viewer cleanup: closing WebRTC and cleaning signaling for fresh reconnection');
     await _webrtcService?.dispose(cleanupSignaling: false);
     await _remoteRenderer.dispose();
+    
+    // Clean old signaling data to allow fresh connection on reconnect
+    try {
+      // First clean up old ICE candidates
+      final candidatesSnapshot = await FirebaseFirestore.instance
+          .collection('webrtc_signaling')
+          .doc(widget.requestId)
+          .collection('candidates')
+          .get();
+      
+      for (var doc in candidatesSnapshot.docs) {
+        await doc.reference.delete();
+      }
+      print('✅ Old ICE candidates cleaned');
+      
+      // Then reset signaling document
+      await FirebaseFirestore.instance
+          .collection('webrtc_signaling')
+          .doc(widget.requestId)
+          .set({
+        'viewerReady': false,
+        'viewerDisconnected': true,
+        'viewerDisconnectTime': FieldValue.serverTimestamp(),
+        // Remove old offer/answer to force fresh negotiation
+        'offer': FieldValue.delete(),
+        'answer': FieldValue.delete(),
+      }, SetOptions(merge: true));
+      print('✅ Viewer disconnect - old signaling data cleaned for fresh reconnect');
+    } catch (e) {
+      print('⚠️ Failed to clean signaling data: $e');
+    }
   }
 
   Future<void> _cleanup() async {

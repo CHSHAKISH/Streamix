@@ -6,6 +6,7 @@ import 'package:streamix/screens/requests/requests_list_screen.dart';
 import 'package:streamix/screens/settings/settings_screen.dart';
 import 'package:streamix/services/auth_service.dart';
 import 'package:streamix/services/ticket_service.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,6 +22,27 @@ class _HomeScreenState extends State<HomeScreen> {
   String _searchQuery = "";
 
   final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _requestAllPermissions();
+  }
+
+  Future<void> _requestAllPermissions() async {
+    print('🔐 Requesting all permissions at app startup...');
+    
+    // Request all permissions at once
+    await [
+      Permission.camera,
+      Permission.microphone,
+      Permission.location,
+      Permission.locationWhenInUse,
+      Permission.notification,
+    ].request();
+    
+    print('✅ All permissions requested');
+  }
 
   @override
   void dispose() {
