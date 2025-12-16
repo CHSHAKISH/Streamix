@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:streamix/screens/session/active_session_screen.dart';
 import 'package:streamix/services/ticket_service.dart';
+import 'package:streamix/constants/app_colors.dart';
 
 class RequestsListScreen extends StatefulWidget {
   const RequestsListScreen({super.key});
@@ -137,10 +138,36 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
     }
   }
 
+  String _getServiceIcon(String serviceType) {
+    switch (serviceType) {
+      case 'location': return 'assets/images/location.png';
+      case 'audio': return 'assets/images/audio.png';
+      case 'front_camera': return 'assets/images/front_image.png';
+      case 'back_camera': return 'assets/images/back_image.png';
+      case 'front_video': return 'assets/images/front_video.png';
+      case 'back_video': return 'assets/images/back_video.png';
+      case 'front_stream': return 'assets/images/front_live.png';
+      case 'back_stream': return 'assets/images/back_live.png';
+      default: return 'assets/images/location.png';
+    }
+  }
+
+  String _formatServiceName(String serviceType) {
+    switch (serviceType) {
+      case 'location': return 'Location';
+      case 'audio': return 'Audio';
+      case 'front_camera': return 'Front Camera';
+      case 'back_camera': return 'Back Camera';
+      case 'front_video': return 'Front Video';
+      case 'back_video': return 'Back Video';
+      case 'front_stream': return 'Front Stream';
+      case 'back_stream': return 'Back Stream';
+      default: return serviceType;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
-
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('requests')
@@ -148,7 +175,7 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
           .snapshots(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return Scaffold(appBar: AppBar(title: const Text('My Requests')), body: const Center(child: CircularProgressIndicator()));
+          return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
 
         var requests = snapshot.data?.docs ?? [];
@@ -161,25 +188,11 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
         });
 
         return Scaffold(
-          appBar: AppBar(
-            leading: _isSelectionMode
-                ? IconButton(icon: const Icon(Icons.close), onPressed: () => setState(() { _isSelectionMode = false; _selectedIds.clear(); }))
-                : null,
-            title: Text(_isSelectionMode ? '${_selectedIds.length} Selected' : 'My Requests'),
-            actions: [
-              if (_isSelectionMode) ...[
-                IconButton(
-                  icon: Icon(_selectedIds.length == requests.length ? Icons.deselect : Icons.select_all),
-                  onPressed: () => _selectAll(requests),
-                ),
-                IconButton(icon: const Icon(Icons.delete), onPressed: _deleteSelected),
-              ]
-            ],
-          ),
+          backgroundColor: Colors.white,
           body: requests.isEmpty
               ? const Center(child: Text('You have no requests.', style: TextStyle(fontSize: 16)))
               : ListView.builder(
-              padding: const EdgeInsets.only(top: 10, bottom: 80),
+              padding: const EdgeInsets.all(16),
               itemCount: requests.length,
               itemBuilder: (context, index) {
                 var data = requests[index].data() as Map<String, dynamic>;
@@ -193,153 +206,208 @@ class _RequestsListScreenState extends State<RequestsListScreen> {
                 final now = DateTime.now();
 
                 bool isExpired = now.isAfter(endTime);
-                bool isDone = status == 'completed' || isExpired;
-                bool isSelected = _selectedIds.contains(requestId);
-
-                // Status Logic
-                String statusText = status.toUpperCase();
-                Color statusColor = Colors.orange;
-                if (isDone) {
-                  statusText = "DONE"; statusColor = Colors.grey;
-                } else if (status == 'accepted') {
-                  statusColor = Colors.green;
-                  statusText = "ACCEPTED";
-                } else if (status == 'denied') {
-                  statusColor = Colors.red;
-                  statusText = "DENIED";
-                } else {
-                  statusColor = Colors.orange;
-                  statusText = "PENDING";
-                }
-
-                // Dynamic Card Color
-                Color cardColor;
-                if (isSelected) {
-                  cardColor = Theme.of(context).primaryColor.withOpacity(isDarkMode ? 0.3 : 0.1);
-                } else if (status == 'accepted') {
-                  cardColor = isDarkMode ? Colors.green.withOpacity(0.15) : Colors.green.shade50;
-                } else {
-                  cardColor = Theme.of(context).cardColor;
-                }
-
-                String dateStr = DateFormat('MMM d').format(startTime);
-                String timeRange = "${DateFormat('h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}";
                 int durationInSeconds = endTime.difference(startTime).inSeconds;
 
-                return InkWell(
-                  onLongPress: () {
-                    setState(() {
-                      _isSelectionMode = true;
-                      _toggleSelection(requestId);
-                    });
-                  },
-                  onTap: () {
-                    if (_isSelectionMode) _toggleSelection(requestId);
-                  },
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                        color: cardColor,
-                        borderRadius: BorderRadius.circular(12),
-                        border: isSelected ? Border.all(color: Theme.of(context).primaryColor, width: 2) : null,
-                        boxShadow: [
-                          if (!isSelected && !isDarkMode)
-                            BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 6, offset: const Offset(0, 4))
-                        ]
-                    ),
-                    child: IntrinsicHeight(
-                      child: Row(
+                // Status Logic
+                String statusText;
+                Color statusBgColor;
+                Color statusTextColor;
+                
+                if (status == 'completed' || isExpired) {
+                  statusText = 'Completed';
+                  statusBgColor = const Color(0xFF1B5E20).withOpacity(0.15);
+                  statusTextColor = const Color(0xFF1B5E20);
+                } else if (status == 'accepted') {
+                  statusText = 'Accepted';
+                  statusBgColor = AppColors.lightBackground;
+                  statusTextColor = AppColors.accent;
+                } else if (status == 'denied') {
+                  statusText = 'Rejected';
+                  statusBgColor = Colors.red.withOpacity(0.15);
+                  statusTextColor = Colors.red;
+                } else {
+                  statusText = 'Pending';
+                  statusBgColor = Colors.yellow.withOpacity(0.2);
+                  statusTextColor = const Color(0xFFF57C00);
+                }
+
+                String timeRange = "${DateFormat('M/d HH:mm').format(startTime)} - ${DateFormat('M/d HH:mm').format(endTime)}";
+
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F8F8),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
-                          // Status Strip
+                          // Service Icon
                           Container(
-                            width: 6,
+                            width: 50,
+                            height: 50,
                             decoration: BoxDecoration(
-                              color: statusColor,
-                              borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), bottomLeft: Radius.circular(12)),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.all(10),
+                            child: Image.asset(
+                              _getServiceIcon(service),
+                              fit: BoxFit.contain,
                             ),
                           ),
-                          // Content
+                          const SizedBox(width: 12),
+                          // Service Name and From
                           Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(requester, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        decoration: BoxDecoration(
-                                          color: statusColor.withOpacity(0.2),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: Text(statusText, style: TextStyle(color: statusColor, fontSize: 11, fontWeight: FontWeight.bold)),
-                                      )
-                                    ],
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _formatServiceName(service),
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black,
                                   ),
-                                  const SizedBox(height: 4),
-                                  Text(service.replaceAll('_', ' ').toUpperCase(), style: TextStyle(fontSize: 13, color: isDarkMode ? Colors.grey[400] : Colors.black54, letterSpacing: 0.5)),
-                                  const SizedBox(height: 8),
-                                  Row(
-                                    children: [
-                                      Icon(Icons.calendar_today, size: 14, color: isDarkMode ? Colors.grey[400] : Colors.grey),
-                                      const SizedBox(width: 6),
-                                      Text("$dateStr  •  $timeRange", style: TextStyle(fontSize: 14, color: isDarkMode ? Colors.white70 : Colors.black87)),
-                                    ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'From: $requester',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: Colors.grey[600],
                                   ),
-
-                                  // Action Buttons
-                                  if (!_isSelectionMode && !isDone && status != 'denied') ...[
-                                    const SizedBox(height: 16),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        if (status == 'pending') ...[
-                                          OutlinedButton(
-                                            onPressed: () => _ticketService.updateRequestStatus(requestId, false),
-                                            style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
-                                            child: const Text("Deny"),
-                                          ),
-                                          const SizedBox(width: 12),
-                                          ElevatedButton(
-                                            onPressed: () {
-                                              _ticketService.updateRequestStatus(requestId, true);
-                                              // We just accept; Auto-join listener will handle navigation when time comes
-                                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Accepted! Session will start automatically at the scheduled time.")));
-                                            },
-                                            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).primaryColor, foregroundColor: Colors.white),
-                                            child: const Text("Accept"),
-                                          ),
-                                        ],
-                                        if (status == 'accepted')
-                                          ElevatedButton.icon(
-                                            icon: const Icon(Icons.open_in_new, size: 16),
-                                            label: const Text("Open Session"),
-                                            style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                                            onPressed: () {
-                                              if (DateTime.now().isBefore(startTime)) {
-                                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Starts at ${DateFormat('h:mm a').format(startTime)}"), backgroundColor: Colors.orange));
-                                                return;
-                                              }
-                                              if (DateTime.now().isAfter(endTime)) {
-                                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Expired"), backgroundColor: Colors.red));
-                                                return;
-                                              }
-                                              Navigator.push(context, MaterialPageRoute(builder: (_) => ActiveSessionScreen(requestId: requestId, serviceType: service, durationInSeconds: durationInSeconds, scheduledStartTime: startTime)));
-                                            },
-                                          )
-                                      ],
-                                    )
-                                  ]
-                                ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          // Status Badge
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: statusBgColor,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: statusTextColor, width: 1),
+                            ),
+                            child: Text(
+                              statusText,
+                              style: TextStyle(
+                                color: statusTextColor,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
                         ],
                       ),
-                    ),
+                      const SizedBox(height: 12),
+                      // Time Info
+                      Row(
+                        children: [
+                          Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
+                          const SizedBox(width: 6),
+                          Text(
+                            timeRange,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                        ],
+                      ),
+                      // Action Buttons
+                      if (status == 'pending') ...[
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => _ticketService.updateRequestStatus(requestId, false),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.pink,
+                                  side: const BorderSide(color: Colors.pink),
+                                  backgroundColor: Colors.pink.shade50,
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(30),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Reject',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: ElevatedButton(
+                                onPressed: () {
+                                  _ticketService.updateRequestStatus(requestId, true);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text("Accepted! Session will start automatically at the scheduled time."))
+                                  );
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.lightBackground,
+                                  foregroundColor: AppColors.accent,
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(30),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Accept',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      if (status == 'accepted' && !isExpired) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton(
+                            onPressed: () {
+                              if (DateTime.now().isBefore(startTime)) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text("Starts at ${DateFormat('h:mm a').format(startTime)}"), backgroundColor: Colors.orange)
+                                );
+                                return;
+                              }
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ActiveSessionScreen(
+                                    requestId: requestId,
+                                    serviceType: service,
+                                    durationInSeconds: durationInSeconds,
+                                    scheduledStartTime: startTime,
+                                  ),
+                                ),
+                              );
+                            },
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.primary,
+                              side: BorderSide(color: AppColors.primary, width: 2),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(30),
+                              ),
+                            ),
+                            child: const Text(
+                              'Open Session',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 );
               }

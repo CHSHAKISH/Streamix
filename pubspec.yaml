@@ -80,6 +80,14 @@ flutter:
   assets:
     - .env
     - assets/service_account.json
+    - assets/images/audio.png
+    - assets/images/back_image.png
+    - assets/images/back_live.png
+    - assets/images/back_video.png
+    - assets/images/front_image.png
+    - assets/images/front_live.png
+    - assets/images/front_video.png
+    - assets/images/location.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

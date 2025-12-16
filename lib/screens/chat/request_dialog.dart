@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:streamix/services/ticket_service.dart';
+import 'package:streamix/constants/app_colors.dart';
 
 class RequestDialog extends StatefulWidget {
   final String peerUserId;
@@ -20,14 +21,14 @@ class _RequestDialogState extends State<RequestDialog> {
   bool _isLoading = false;
 
   final List<Map<String, dynamic>> _services = [
-    {'id': 'location', 'name': 'Location', 'icon': Icons.location_on},
-    {'id': 'audio', 'name': 'Audio', 'icon': Icons.mic},
-    {'id': 'front_camera', 'name': 'Front Camera', 'icon': Icons.camera_front},
-    {'id': 'back_camera', 'name': 'Back Camera', 'icon': Icons.camera_rear},
-    {'id': 'front_video', 'name': 'Front Video', 'icon': Icons.videocam},
-    {'id': 'back_video', 'name': 'Back Video', 'icon': Icons.videocam_off},
-    {'id': 'front_stream', 'name': 'Front Stream', 'icon': Icons.wifi_tethering},
-    {'id': 'back_stream', 'name': 'Back Stream', 'icon': Icons.wifi_tethering_off},
+    {'id': 'location', 'name': 'Location', 'image': 'assets/images/location.png', 'width': 60.0, 'height': 60.0},
+    {'id': 'audio', 'name': 'Audio', 'image': 'assets/images/audio.png', 'width': 36.0, 'height': 36.0},
+    {'id': 'front_camera', 'name': 'Front Cam', 'image': 'assets/images/front_image.png', 'width': 36.0, 'height': 36.0},
+    {'id': 'back_camera', 'name': 'Back Cam', 'image': 'assets/images/back_image.png', 'width': 36.0, 'height': 36.0},
+    {'id': 'front_video', 'name': 'Front Vdo', 'image': 'assets/images/front_video.png', 'width': 36.0, 'height': 36.0},
+    {'id': 'back_video', 'name': 'Back Vdo', 'image': 'assets/images/back_video.png', 'width': 36.0, 'height': 36.0},
+    {'id': 'front_stream', 'name': 'F - Stream', 'image': 'assets/images/front_live.png', 'width': 36.0, 'height': 36.0},
+    {'id': 'back_stream', 'name': 'B - Stream', 'image': 'assets/images/back_live.png', 'width': 36.0, 'height': 36.0},
   ];
 
   Future<void> _pickDateTime(bool isStartTime) async {
@@ -111,94 +112,179 @@ class _RequestDialogState extends State<RequestDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(20.0),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(
-                'Schedule a Request',
-                textAlign: TextAlign.center,
+              // Title
+              const Text(
+                'Schedule Request',
+                textAlign: TextAlign.start,
                 style: TextStyle(
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
-                  color: Theme.of(context).primaryColor,
+                  color: Colors.black,
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
 
-              DropdownButtonFormField<String>(
-                value: _selectedService,
-                decoration: const InputDecoration(labelText: 'Service'),
-                items: _services.map((service) {
-                  return DropdownMenuItem<String>(
-                    value: service['id'],
-                    child: Row(
+              // Service Grid
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 4,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: 0.75,
+                ),
+                itemCount: _services.length,
+                itemBuilder: (context, index) {
+                  final service = _services[index];
+                  final isSelected = _selectedService == service['id'];
+                  
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _selectedService = service['id'];
+                      });
+                    },
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(service['icon'], color: Theme.of(context).primaryColor),
-                        const SizedBox(width: 12),
-                        Text(service['name']),
+                        Container(
+                          height: 60,
+                          decoration: BoxDecoration(
+                            color: isSelected 
+                                ? AppColors.lightBackground 
+                                : const Color(0xFFF5F5F5),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isSelected 
+                                  ? AppColors.accent 
+                                  : Colors.transparent,
+                              width: 2,
+                            ),
+                          ),
+                          padding: const EdgeInsets.all(8),
+                          child: Center(
+                            child: Image.asset(
+                              service['image'],
+                              width: service['width'],
+                              height: service['height'],
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          service['name'],
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                            color: Colors.black87,
+                          ),
+                        ),
                       ],
                     ),
                   );
-                }).toList(),
-                onChanged: (value) {
-                  if (value != null) {
-                    setState(() { _selectedService = value; });
-                  }
                 },
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
 
-              Text('Start Time', style: TextStyle(color: Colors.grey[700])),
-              InkWell(
-                onTap: () => _pickDateTime(true),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey[400]!),
-                    borderRadius: BorderRadius.circular(12),
+              // Time Pickers Row
+              Row(
+                children: [
+                  // Start Time
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => _pickDateTime(true),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF5F5F5),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.calendar_today_outlined, color: Colors.grey[600], size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Start Time',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(DateFormat('MMM d, yyyy  h:mm a').format(_startTime)),
-                      const Icon(Icons.calendar_month),
-                    ],
+                  const SizedBox(width: 12),
+                  // End Time
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => _pickDateTime(false),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF5F5F5),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.calendar_today_outlined, color: Colors.grey[600], size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              'End Time',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              Text('End Time', style: TextStyle(color: Colors.grey[700])),
-              InkWell(
-                onTap: () => _pickDateTime(false),
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey[400]!),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(DateFormat('MMM d, yyyy  h:mm a').format(_endTime)),
-                      const Icon(Icons.calendar_month),
-                    ],
-                  ),
-                ),
+                ],
               ),
               const SizedBox(height: 24),
 
+              // Send Request Button
               _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : ElevatedButton(
-                onPressed: _sendRequest,
-                child: const Text('Send Request'),
-              ),
+                  ? const Center(
+                      child: CircularProgressIndicator(
+                        color: AppColors.accent,
+                      ),
+                    )
+                  : SizedBox(
+                      height: 50,
+                      child: ElevatedButton(
+                        onPressed: _sendRequest,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          'Send Request',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
             ],
           ),
         ),

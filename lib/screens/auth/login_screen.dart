@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:streamix/services/auth_service.dart';
+import 'package:streamix/constants/app_colors.dart';
 
 class LoginScreen extends StatefulWidget {
   final VoidCallback toggleView; // To switch to the sign-up screen
@@ -48,66 +49,139 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Widget _buildTextField({
+    required TextEditingController controller,
+    required String hint,
+    required IconData icon,
+    TextInputType? keyboardType,
+    bool obscureText = false,
+    Widget? suffixIcon,
+    String? Function(String?)? validator,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF2A2A2A) : const Color(0xFFF5F5F5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: TextFormField(
+        controller: controller,
+        obscureText: obscureText,
+        keyboardType: keyboardType,
+        validator: validator,
+        style: TextStyle(color: isDark ? Colors.white : Colors.black),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(
+            color: isDark ? Colors.white54 : Colors.black54,
+            fontSize: 16,
+          ),
+          prefixIcon: Icon(icon, color: isDark ? Colors.white54 : Colors.black54),
+          suffixIcon: suffixIcon,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 18,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF1A1A1A) : Colors.white,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
+          padding: const EdgeInsets.symmetric(horizontal: 24.0),
           child: Form(
             key: _formKey,
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(height: 60),
-                Text(
-                  'Welcome Back!',
+                const SizedBox(height: 80),
+                // Logo/Brand Name
+                const Text(
+                  'URmine',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 32,
+                    fontSize: 48,
                     fontWeight: FontWeight.bold,
-                    color: Theme.of(context).primaryColor,
+                    color: AppColors.accent,
+                    letterSpacing: -1,
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Sign in to your Streamix account',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 16, color: Colors.grey),
-                ),
                 const SizedBox(height: 40),
-                TextFormField(
+                // Title
+                Text(
+                  'Sign In To Your Account',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black,
+                  ),
+                ),
+                const SizedBox(height: 32),
+                // Email Field
+                _buildTextField(
                   controller: _emailController,
-                  decoration: const InputDecoration(labelText: 'Email'),
+                  hint: 'Email',
+                  icon: Icons.email_outlined,
                   keyboardType: TextInputType.emailAddress,
                   validator: (val) => val!.isEmpty ? 'Enter an email' : null,
                 ),
                 const SizedBox(height: 16),
-                TextFormField(
+                // Password Field
+                _buildTextField(
                   controller: _passwordController,
+                  hint: 'Password',
+                  icon: Icons.lock_outline,
                   obscureText: !_passwordVisible,
-                  decoration: InputDecoration(
-                    labelText: 'Password',
-                    suffixIcon: IconButton(
-                      icon: Icon(
-                        _passwordVisible ? Icons.visibility : Icons.visibility_off,
-                      ),
-                      onPressed: () {
-                        setState(() { _passwordVisible = !_passwordVisible; });
-                      },
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _passwordVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                      color: Theme.of(context).brightness == Brightness.dark ? Colors.white54 : Colors.black54,
                     ),
+                    onPressed: () {
+                      setState(() { _passwordVisible = !_passwordVisible; });
+                    },
                   ),
                   validator: (val) => val!.isEmpty ? 'Enter your password' : null,
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 32),
+                // Sign In Button
                 if (_isLoading)
-                  const Center(child: CircularProgressIndicator())
+                  const Center(
+                    child: CircularProgressIndicator(
+                      color: AppColors.accent,
+                    ),
+                  )
                 else
-                  ElevatedButton(
-                    onPressed: _handleSignIn,
-                    child: const Text('Sign In'),
+                  SizedBox(
+                    height: 56,
+                    child: ElevatedButton(
+                      onPressed: _handleSignIn,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accent,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        'Sign In',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ),
+                // Error Message
                 if (_error.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 16.0),
@@ -117,10 +191,32 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: const TextStyle(color: Colors.red, fontSize: 14),
                     ),
                   ),
-                TextButton(
-                  onPressed: widget.toggleView,
-                  child: const Text("Don't have an account? Sign Up"),
+                const SizedBox(height: 20),
+                // Sign Up Link
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Already have an account? ',
+                      style: TextStyle(
+                        color: Theme.of(context).brightness == Brightness.dark ? Colors.white54 : Colors.black54,
+                        fontSize: 14,
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: widget.toggleView,
+                      child: const Text(
+                        'Sign Up',
+                        style: TextStyle(
+                          color: AppColors.accent,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 32),
               ],
             ),
           ),
